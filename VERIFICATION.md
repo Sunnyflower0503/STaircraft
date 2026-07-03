@@ -53,3 +53,25 @@ Saved build\cpp_closedloop.csv
 2. validate_closedloop.exe 运行成功
 3. build/cpp_closedloop.csv 输出成功
 ```
+
+## Dynamic Derivative Check
+
+复查时间：2026-07-03
+
+结论：
+
+```text
+1. MATLAB 和 C++ 均使用相同的 alpha_dyn = clamp(alpha, -0.5, 0.5) 作为动导数插值自变量。
+2. p_hat = p * b / (2 Va)，q_hat = q * MAC / (2 Va)，r_hat = r * b / (2 Va) 两边一致。
+3. CYp/CYr、Clbeta/Clp/Clr、Cnbeta/Cnp/Cnr 的插值和组合公式两边一致。
+4. C++ 已补齐 CLalpdot * alpha_dot_hat 和 Cmalpdot * alpha_dot_hat。
+5. alpha_dot_hat 默认值为 0，与 MATLAB 缺省行为一致。
+```
+
+复查后重新运行：
+
+```text
+MATLAB model verification passed.
+C++ aircraft.cpp / validate_closedloop.cpp 编译成功。
+Saved build\cpp_closedloop.csv
+```

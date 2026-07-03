@@ -84,6 +84,7 @@ struct Param {
     double S_free{};
     double alpha_slip_switch{1.0};
     double DP_slip_switch{1.0};
+    double alpha_dot_hat{0.0};
     std::array<Vec3, 8> prop_pos{};
     double prop_D{0.2032};
     std::array<double, 8> prop_angle{};

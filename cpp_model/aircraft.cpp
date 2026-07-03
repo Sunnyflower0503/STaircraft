@@ -353,12 +353,12 @@ ForceMoment tandemAeroFm(const Vec3& ve, const Mat3& R_eb, const Vec3& omega_b, 
     const double CY_dyn = p.aero.CYbeta * beta
         + interpArr<14>(p.alpha_arr, p.aero.CYp_arr, alpha_dyn) * p_hat
         + interpArr<14>(p.alpha_arr, p.aero.CYr_arr, alpha_dyn) * r_hat;
-    const double CL_dyn = p.aero.CLq * q_hat;
+    const double CL_dyn = p.aero.CLq * q_hat + p.aero.CLalpdot * p.alpha_dot_hat;
     const Vec3 F_sw = scale(aeroForceToBody(alpha, beta, 0.0, CY_dyn, CL_dyn), K * qbar * p.S);
     const double Cl_dyn = interpArr<14>(p.alpha_arr, p.aero.Clbeta_arr, alpha_dyn) * beta
         + interpArr<14>(p.alpha_arr, p.aero.Clp_arr, alpha_dyn) * p_hat
         + interpArr<14>(p.alpha_arr, p.aero.Clr_arr, alpha_dyn) * r_hat;
-    const double Cm_dyn = p.aero.Cmq * q_hat;
+    const double Cm_dyn = p.aero.Cmq * q_hat + p.aero.Cmalpdot * p.alpha_dot_hat;
     const double Cn_dyn = interpArr<14>(p.alpha_arr, p.aero.Cnbeta_arr, alpha_dyn) * beta
         + interpArr<14>(p.alpha_arr, p.aero.Cnp_arr, alpha_dyn) * p_hat
         + interpArr<14>(p.alpha_arr, p.aero.Cnr_arr, alpha_dyn) * r_hat;

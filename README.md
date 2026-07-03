@@ -171,6 +171,23 @@ build\validate_closedloop.exe build\cpp_closedloop.csv
 10. 固定翼控制律 C++ 接口
 ```
 
+动导数使用说明：
+
+```text
+CY_dyn = CYbeta * beta + CYp(alpha_dyn) * p_hat + CYr(alpha_dyn) * r_hat
+Cl_dyn = Clbeta(alpha_dyn) * beta + Clp(alpha_dyn) * p_hat + Clr(alpha_dyn) * r_hat
+Cn_dyn = Cnbeta(alpha_dyn) * beta + Cnp(alpha_dyn) * p_hat + Cnr(alpha_dyn) * r_hat
+CL_dyn = CLq * q_hat + CLalpdot * alpha_dot_hat
+Cm_dyn = Cmq * q_hat + Cmalpdot * alpha_dot_hat
+
+p_hat = p * b / (2 Va)
+q_hat = q * MAC / (2 Va)
+r_hat = r * b / (2 Va)
+alpha_dyn = clamp(alpha, -0.5, 0.5)
+```
+
+`alpha_dot_hat` 当前默认值为 0，与 MATLAB `tandem_aero_fm.m` 中缺省行为一致；如果后续外部模型提供迎角变化率，可通过 C++ `Param::alpha_dot_hat` 接入。
+
 如需证明更大工况范围内完全一致，应继续增加测试用例，例如：
 
 ```text
