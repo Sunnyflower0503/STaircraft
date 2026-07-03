@@ -1,0 +1,6 @@
+cpp_model/build/
+*.obj
+*.exe
+*.pdb
+*.ilk
+*.csv
