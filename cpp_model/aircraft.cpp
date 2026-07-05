@@ -231,6 +231,61 @@ Vec3 aeroForceToBody(double alpha, double beta, double CD, double CY, double CL)
     };
 }
 
+struct PropulsionCoefficients {
+    std::array<double, 3> P_motor{};
+    std::array<double, 3> CT{};
+    std::array<double, 3> CM{};
+    std::array<double, 3> CP{};
+};
+
+PropulsionCoefficients defaultPropulsionCoefficients() {
+    return {
+        {16.501776, 160.89067, -54.531088},
+        {-0.44128219, 0.067079209, 0.095811585},
+        {-0.033493272, 0.020157983, 0.0072201342},
+        {-0.21044444, 0.12665634, 0.045365441},
+    };
+}
+
+double poly2(const std::array<double, 3>& c, double x) {
+    return (c[0] * x + c[1]) * x + c[2];
+}
+
+double solveRpsFromPower(double P_motor, double V0, double rho, double D, const std::array<double, 3>& CP_coef) {
+    if (P_motor <= 0.0 || rho <= 0.0 || D <= 0.0) {
+        return 0.0;
+    }
+
+    const double aP = CP_coef[0];
+    const double bP = CP_coef[1];
+    const double cP = CP_coef[2];
+    const auto f = [&](double n) {
+        return rho * (cP * std::pow(D, 5.0) * n * n * n
+                    + bP * std::pow(D, 4.0) * V0 * n * n
+                    + aP * std::pow(D, 3.0) * V0 * V0 * n) - P_motor;
+    };
+
+    double lo = 0.0;
+    double hi = 10.0;
+    while (f(hi) < 0.0 && hi < 20000.0) {
+        hi *= 2.0;
+    }
+
+    if (f(hi) < 0.0) {
+        return 0.0;
+    }
+
+    for (int k = 0; k < 80; ++k) {
+        const double mid = 0.5 * (lo + hi);
+        if (f(mid) >= 0.0) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    return 0.5 * (lo + hi);
+}
+
 }  // namespace
 
 double sat(double x, double x_min, double x_max) {
@@ -242,28 +297,32 @@ Vec3 sat(const Vec3& x, double x_min, double x_max) {
 }
 
 RotorThrust tandemRotorThrust(double dt, double alpha, double beta, double tas, double prop_spin, const Param& p, double prop_angle) {
-    const double n_rpm = (-3424.0 * dt + 12810.0) * dt - 4.0;
-    const double n_rps = std::max(n_rpm / 60.0, 0.0);
-    if (n_rps <= 0.0) {
-        return {};
-    }
+    const PropulsionCoefficients coef = defaultPropulsionCoefficients();
+    const double D = p.prop_D > 0.0 ? p.prop_D : 0.2032;
+    const double rho = p.rho > 0.0 ? p.rho : 1.225;
+    dt = clamp(dt, 0.0, 1.0);
+
     const double ca = std::cos(prop_angle);
     const double sa = std::sin(prop_angle);
     const double v_axial = tas * std::cos(alpha) * std::cos(beta) * ca - tas * std::sin(alpha) * std::cos(beta) * sa;
-    const double J = v_axial / (n_rps * p.prop_D);
-    double CT = 0.0;
-    double CM = 0.0;
-    if (J <= 0.8) {
-        CT = ((0.3101 * J - 0.5816) * J + 0.1747) * J + 0.09582;
-        CM = (-0.0169 * J + 0.0071) * J + 0.0103;
+
+    const double P_motor = std::max(poly2(coef.P_motor, dt), 0.0);
+    const double n_rps = solveRpsFromPower(P_motor, v_axial, rho, D, coef.CP);
+    if (n_rps <= 0.0) {
+        return {};
     }
+
+    const double J = v_axial / (n_rps * D);
+    const double CT = poly2(coef.CT, J);
+    double CM = poly2(coef.CM, J);
     if (CT <= 0.0) {
         return {0.0, 0.0, n_rps, 0.0};
     }
+    CM = std::max(CM, 0.0);
     const double n2 = n_rps * n_rps;
     return {
-        n2 * CT * 0.0017048839192575996 * 1.225,
-        prop_spin * CM * n2 * 0.00034643241239314424 * 1.225,
+        CT * rho * n2 * std::pow(D, 4.0),
+        prop_spin * CM * rho * n2 * std::pow(D, 5.0),
         n_rps,
         CT,
     };

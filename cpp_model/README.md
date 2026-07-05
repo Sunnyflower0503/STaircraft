@@ -62,6 +62,24 @@ FixedWingController    固定翼控制律
 
 这些接口的目的是让 C++ 版本像 `GJ/model` 中的 MATLAB `.m` 文件一样，可以作为一个模型模块被外部控制律调用。
 
+## 主旋翼功率平衡模型
+
+`tandemRotorThrust` 使用与 MATLAB `tandem_rotor_thrust.m` 相同的功率平衡模型：
+
+```text
+P_motor(delta_t) = 16.501776 * delta_t^2 + 160.89067 * delta_t - 54.531088
+CT(J) = -0.44128219 * J^2 + 0.067079209 * J + 0.095811585
+CM(J) = -0.033493272 * J^2 + 0.020157983 * J + 0.0072201342
+CP(J) = -0.21044444 * J^2 + 0.12665634 * J + 0.045365441
+```
+
+转速 `n_rps` 不再由 `RPM=f(delta_t)` 直接得到，而是通过 `P_motor = P_shaft(n, V_axial)` 二分求解。推力和反扭矩为：
+
+```text
+T = CT * rho * n_rps^2 * D^4
+M = prop_spin * CM * rho * n_rps^2 * D^5
+```
+
 ## XLSX 数据说明
 
 `data/` 中的两个 Excel 文件已经复制进来，用于说明和追溯原始气动数据来源：

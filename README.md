@@ -20,7 +20,11 @@ MODEL/
   README.md
   VERIFICATION.md
   verify_matlab_model.m
+  verify_propulsion_power_balance.m
   .gitignore
+
+  docs/
+    PROPULSION_MODEL_UPDATE_GUIDE.md
 
   matlab_model/
     init_param_zx.m
@@ -43,6 +47,9 @@ MODEL/
     data/
       aerodata1_tianshizhiyi_CFDslip.xlsx
       aerodata2_tianshizhiyi.xlsx
+
+  propulsion_data/
+    ST建模.xlsx
 ```
 
 `cpp_model/build/` 是编译验证产生的目录，已被 `.gitignore` 忽略。
@@ -89,6 +96,27 @@ Runge_Kutta4             四阶 Runge-Kutta 积分
 init_param_zx            参数、气动表、全迎角补全
 ```
 
+主旋翼推力模型 `tandem_rotor_thrust.m` 已更新为功率平衡模型：
+
+```text
+1. delta_t -> P_motor(delta_t)
+2. C_P(J) 与来流 V0 建立功率平衡
+3. 二分法求 n_rps
+4. J = V0 / (n_rps * D)
+5. T = C_T * rho * n_rps^2 * D^4
+6. M = prop_spin * C_M * rho * n_rps^2 * D^5
+```
+
+使用系数：
+
+```text
+P_motor = 16.501776 * delta_t^2 + 160.89067 * delta_t - 54.531088
+CT(J) = -0.44128219 * J^2 + 0.067079209 * J + 0.095811585
+CM(J) = -0.033493272 * J^2 + 0.020157983 * J + 0.0072201342
+CP(J) = -0.21044444 * J^2 + 0.12665634 * J + 0.045365441
+D = 0.2032 m
+```
+
 ## C++ 模型
 
 核心入口见 `cpp_model/aircraft.hpp`：
@@ -114,6 +142,8 @@ gj2::FixedWingController
 
 C++ 运行时不直接读取 `.xlsx`。气动数据已经按 `matlab_model/init_param_zx.m` 移植并内嵌到 `aircraft.cpp` 中。`cpp_model/data/` 下的 Excel 文件用于数据来源追溯和人工核对。
 
+主旋翼推力模型 `gj2::tandemRotorThrust` 已与 MATLAB `tandem_rotor_thrust.m` 对齐，使用同一套功率平衡系数和二分法转速求解。辅助桨 `gj2::tandemAddpropFm` 仍保留原 0.127 m 辅助桨模型，未套用 8 英寸主旋翼系数。
+
 ## 验证 MATLAB 模型
 
 在 MATLAB 中运行：
@@ -132,6 +162,22 @@ run('D:\D_zx\26WORK\ShengTai\0610ST_mini_controller\MODEL\verify_matlab_model.m'
 ```
 
 最近一次验证结果记录在 `VERIFICATION.md`。
+
+## 验证主旋翼功率平衡模型
+
+在 MATLAB 中运行：
+
+```matlab
+run('D:\D_zx\26WORK\ShengTai\0610ST_mini_controller\MODEL\verify_propulsion_power_balance.m')
+```
+
+该脚本使用 `propulsion_data/ST建模.xlsx` 中的车载实测数据，比较旧油门-RPM 多项式和新功率平衡模型的 RPM 预测误差，并输出：
+
+```text
+propulsion_power_balance_validation.csv
+```
+
+该 CSV 是验证产物，已由 `.gitignore` 忽略。
 
 ## 验证 C++ 模型
 

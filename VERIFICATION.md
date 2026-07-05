@@ -75,3 +75,43 @@ MATLAB model verification passed.
 C++ aircraft.cpp / validate_closedloop.cpp 编译成功。
 Saved build\cpp_closedloop.csv
 ```
+
+## Propulsion Power-Balance Update
+
+更新时间：2026-07-05
+
+更新内容：
+
+```text
+1. MATLAB tandem_rotor_thrust.m 使用功率平衡模型。
+2. C++ gj2::tandemRotorThrust 使用同一套功率平衡模型。
+3. 主旋翼不再使用 RPM=f(delta_t) 作为正式转速模型。
+4. 转速 n_rps 由 P_motor(delta_t)=P_shaft(n,V_axial) 二分求解。
+5. CT/CM/CP/P_motor 系数来自 propulsion_data/ST建模.xlsx。
+```
+
+功率平衡实测数据验证：
+
+```text
+Old direct throttle-to-RPM polynomial:
+  N = 16
+  RMSE = 733.21 RPM
+  MAE = 728.63 RPM
+  Max relative error = 13.08 %
+  R2 = 0.8068
+
+New power-balance model with measured V0:
+  N = 16
+  RMSE = 109.61 RPM
+  MAE = 86.02 RPM
+  Max relative error = 3.70 %
+  R2 = 0.9957
+```
+
+复查后重新运行：
+
+```text
+MATLAB model verification passed.
+C++ aircraft.cpp / validate_closedloop.cpp 编译成功。
+Saved build/cpp_closedloop.csv
+```
