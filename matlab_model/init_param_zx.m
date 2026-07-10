@@ -21,7 +21,10 @@ param.S_slip = [0.03048 0.06858 0.06858 0.03048 0.03048 0.06858 0.06858 0.03048]
 param.S_slip_y = [-0.58 -0.175 0.175 0.58 -0.58 -0.175 0.175 0.58];
 param.S_free = param.S - sum(param.S_slip);
 param.slipstream_enable = true;        % 是否考虑 8 个主桨滑流区气动力
-param.slipstream_ff_enable = true;     % 是否使用滑流区 f_f 修正系数；false 时 f_f=1
+param.slipstream_ff_enable = true;     % 是否使用滑流区 f_s 修正系数；false 时 f_s=1
+param.slip_area_from_paper = true;     % true: 论文滑流面积公式；false: 沿用 param.S_slip
+param.slip_x = param.MAC;              % 桨盘到滑流作用点/后缘轴向距离 [m]
+param.slip_chord = param.MAC;          % 滑流覆盖区域弦长 [m]
 param.alpha_slip_switch = 1;
 param.DP_slip_switch = 1;
 

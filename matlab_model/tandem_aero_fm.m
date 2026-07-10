@@ -1,4 +1,4 @@
-function [f_a, m_a] = tandem_aero_fm(Ve, DCM_be, omega_b, delta_aeL, delta_aeR, delta_t, varargin)
+function [f_a, m_a, slip_diag] = tandem_aero_fm(Ve, DCM_be, omega_b, delta_aeL, delta_aeR, delta_t, varargin)
 %TANDEM_AERO_FM  Aerocraft/aero F&M in body axis.
 %
 % Reproduction of the Tandem_zx_trans6 Aerocraft aerodynamic blocks:
@@ -96,25 +96,30 @@ M_sw = K * qbar * S * [b * Cl_dyn; MAC * Cm_dyn; b * Cn_dyn];
 %% S_slip force panels: S184-S191
 F_slip = zeros(3, 1);
 slipstream_enable = get_optional_field(param, 'slipstream_enable', true);
+slip_diag = init_slip_diag();
 for ip = 1:8
     if slipstream_enable
         dt_i = sat(delta_t(ip), get_optional_field(param, 'rotor_throttle_min', 0), 1);
-        [~, ~, n_rps_i, CT_i] = tandem_rotor_thrust(dt_i, alpha, beta, Va, ...
-                                                   param.prop_spin(ip), param, ...
-                                                   param.prop_angle(ip));
-        Va_local_b = slipstream_local_velocity(n_rps_i, CT_i, param.prop_angle(ip), Va_b, param);
+        [T_i, ~, n_rps_i, CT_i] = tandem_rotor_thrust(dt_i, alpha, beta, Va, ...
+                                                     param.prop_spin(ip), param, ...
+                                                     param.prop_angle(ip));
+        slip_state = paper_slipstream_state(T_i, Va_b, param);
     else
-        Va_local_b = Va_b;
+        dt_i = sat(delta_t(ip), get_optional_field(param, 'rotor_throttle_min', 0), 1);
+        [T_i, ~, n_rps_i, CT_i] = tandem_rotor_thrust(dt_i, alpha, beta, Va, ...
+                                                     param.prop_spin(ip), param, ...
+                                                     param.prop_angle(ip));
+        slip_state = paper_slipstream_state(0, Va_b, param);
     end
 
     alpha_slip = alpha;
     beta_slip = beta;
-    Va_slip = norm(Va_local_b);
+    Va_slip = slip_state.Ve_s;
     qbar_slip = qbar;
 
     if Va_slip >= 1e-9
-        alpha_local = atan2(Va_local_b(3), Va_local_b(1));
-        beta_local = atan2(Va_local_b(2), hypot(Va_local_b(1), Va_local_b(3)));
+        alpha_local = slip_state.alpha_s;
+        beta_local = slip_state.beta_s;
     else
         alpha_local = alpha;
         beta_local = beta;
@@ -130,58 +135,143 @@ for ip = 1:8
     end
 
     if slipstream_enable && get_optional_field(param, 'slipstream_ff_enable', true)
-        f_f = slipstream_force_factor(Va_local_b(1), Va_b, alpha_slip);
+        f_s = slipstream_lift_factor(slip_state.Ve_s, Va, alpha_slip, param);
     else
-        f_f = 1;
+        f_s = 1;
     end
 
-    CD_slip = aero_cd(param, alpha_slip);
-    CL_slip = aero_cl(param, alpha_slip);
+    S_slip_i = slipstream_panel_area(ip, param);
+    CL_free = aero_cl(param, alpha_slip);
+    CD_free = aero_cd(param, alpha_slip);
+    CL_slip = f_s * CL_free;
+    CD_slip = slipstream_drag_coefficient(CD_free, CL_free, f_s, param);
     CA_slip = aeroforce2bodyaxis(alpha_slip, beta_slip, CD_slip, 0, CL_slip);
-    F_slip = F_slip + f_f * qbar_slip * param.S_slip(ip) * CA_slip;
+    F_slip_i = qbar_slip * S_slip_i * CA_slip;
+    F_slip = F_slip + F_slip_i;
+
+    slip_diag.T(ip) = T_i;
+    slip_diag.n_rps(ip) = n_rps_i;
+    slip_diag.CT(ip) = CT_i;
+    slip_diag.Vi0(ip) = slip_state.Vi0;
+    slip_diag.Vi_eff(ip) = slip_state.Vi_eff;
+    slip_diag.Rs(ip) = slip_state.Rs;
+    slip_diag.f_s(ip) = f_s;
+    slip_diag.S_slip_i(ip) = S_slip_i;
+    slip_diag.alpha_s(ip) = alpha_slip;
+    slip_diag.beta_s(ip) = beta_slip;
+    slip_diag.qbar_s(ip) = qbar_slip;
+    slip_diag.CL_free(ip) = CL_free;
+    slip_diag.CL_slip(ip) = CL_slip;
+    slip_diag.CD_slip(ip) = CD_slip;
+    slip_diag.F_body(:, ip) = F_slip_i;
 end
 
 f_a = F_elevon + F_sfree + F_sw + F_slip;
 m_a = M_elevon + M_sfree + M_sw;
 end
 
-function Va_local_b = slipstream_local_velocity(n_rps, CT, prop_angle, Va_b, param)
-Va_local_b = Va_b;
-if n_rps <= 0 || CT <= 0
-    return;
+function diag = init_slip_diag()
+diag = struct();
+fields = {'T', 'n_rps', 'CT', 'Vi0', 'Vi_eff', 'Rs', 'f_s', 'S_slip_i', ...
+          'alpha_s', 'beta_s', 'qbar_s', 'CL_free', 'CL_slip', 'CD_slip'};
+for i = 1:numel(fields)
+    diag.(fields{i}) = zeros(8, 1);
+end
+diag.F_body = zeros(3, 8);
 end
 
+function state = paper_slipstream_state(T, Va_b, param)
 D = get_optional_field(param, 'prop_D', 0.2032);
-a0 = get_optional_field(param, 'slipstream_a0', 1.59 / 2);
-Vi = a0 * n_rps * D * sqrt(max(CT, 0));
+Rp = 0.5 * D;
+A = pi * Rp^2;
+rho = param.rho;
+x = max(get_optional_field(param, 'slip_x', get_optional_field(param, 'MAC', D)), 0);
 
-Va_local_b(1) = Va_b(1) + Vi * cos(prop_angle);
-Va_local_b(3) = Va_b(3) - Vi * sin(prop_angle);
+Vinf = max(Va_b(1), 0);
+if T > 0 && rho > 0 && A > 0
+    Vi0 = 0.5 * (-Vinf + sqrt(max(Vinf^2 + 2 * T / (rho * A), 0)));
+else
+    Vi0 = 0;
 end
 
-function f_f = slipstream_force_factor(u_e, Va_b, alpha_slip)
-u_inf = Va_b(1);
-den = u_e^2 + u_inf^2;
+if Rp > 0
+    x_over_Rp = x / Rp;
+    Vi_eff = Vi0 * (1 + x_over_Rp / sqrt(1 + x_over_Rp^2));
+else
+    Vi_eff = Vi0;
+end
+
+if Vi_eff > 1e-12
+    Rs = Rp * sqrt(max(Vi0 / Vi_eff, 0));
+else
+    Rs = Rp;
+end
+
+u_s = Va_b(1) + Vi_eff;
+v_s = Va_b(2);
+w_s = Va_b(3);
+Ve_s = sqrt(u_s^2 + v_s^2 + w_s^2);
+
+if Ve_s >= 1e-12
+    alpha_s = atan2(w_s, u_s);
+    beta_s = atan2(v_s, hypot(u_s, w_s));
+else
+    alpha_s = 0;
+    beta_s = 0;
+end
+
+state = struct('Vi0', Vi0, 'Vi_eff', Vi_eff, 'Rs', Rs, 'Ve_s', Ve_s, ...
+               'alpha_s', alpha_s, 'beta_s', beta_s);
+end
+
+function f_s = slipstream_lift_factor(Ve_s, Vinf, alpha_s, param)
+den = Ve_s^2 + Vinf^2;
 if den <= 1e-12
-    f_f = 1;
+    f_s = 1;
     return;
 end
 
-a0 = 0.3 / (0.5 * 0.2032);
-a1 = 0.5;
-lambda = (u_e^2 - u_inf^2) / den;
-sa = sin(alpha_slip);
+a0 = get_optional_field(param, 'slip_a0', 0.3 / (0.5 * 0.2032));
+a1 = get_optional_field(param, 'slip_a1', 0.5);
+lambda = (Ve_s^2 - Vinf^2) / den;
+lambda = min(max(lambda, -0.999999), 0.999999);
+sa = sin(alpha_s);
 
-sigma = 1 ...
-    + lambda / (1 + 4 * a1^2 / a0^2 + 4 * a1 / a0 * sa) ...
-    + lambda / (1 + 4 * a1^2 / a0^2 - 4 * a1 / a0 * sa) ...
-    + lambda^2 / (1 + 4 / a0^2 + 4 / a0 * sa) ...
-    + lambda^2 / (1 + 4 / a0^2 - 4 / a0 * sa);
+d1 = protect_denominator(1 + 4 * a1^2 / a0^2 + 4 * a1 / a0 * sa);
+d2 = protect_denominator(1 + 4 * a1^2 / a0^2 - 4 * a1 / a0 * sa);
+d3 = protect_denominator(1 + 4 / a0^2 + 4 / a0 * sa);
+d4 = protect_denominator(1 + 4 / a0^2 - 4 / a0 * sa);
 
-if abs(sigma) <= 1e-12
-    f_f = 1;
+sigma = 1 + lambda / d1 + lambda / d2 + lambda^2 / d3 + lambda^2 / d4;
+if ~isfinite(sigma) || abs(sigma) <= 1e-9
+    f_s = 1;
 else
-    f_f = 1 / sigma;
+    f_s = 1 / sigma;
+end
+end
+
+function value = protect_denominator(value)
+if abs(value) < 1e-9
+    value = sign(value + (value == 0)) * 1e-9;
+end
+end
+
+function S_slip_i = slipstream_panel_area(ip, param)
+if get_optional_field(param, 'slip_area_from_paper', false)
+    D = get_optional_field(param, 'prop_D', 0.2032);
+    Rp = 0.5 * D;
+    c = get_optional_field(param, 'slip_chord', get_optional_field(param, 'MAC', 0.3));
+    S_slip_i = (2 - 1 / sqrt(2)) * Rp^2 + (1 / sqrt(2)) * Rp * c;
+else
+    S_slip_i = param.S_slip(ip);
+end
+end
+
+function CD_slip = slipstream_drag_coefficient(CD_free, CL_free, f_s, param)
+if isfield(param, 'aero') && isfield(param.aero, 'CD0') && isfield(param, 'slip_drag_k')
+    CD_slip = param.aero.CD0 + f_s * param.slip_drag_k * CL_free^2;
+else
+    CD_slip = CD_free;
 end
 end
 
