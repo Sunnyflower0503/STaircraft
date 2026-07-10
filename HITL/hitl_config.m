@@ -20,7 +20,7 @@ cfg.mavlink.rx_msg = "SERVO_OUTPUT_RAW";
 cfg.mavlink.tx_msg = "HIL_STATE_QUATERNION";
 cfg.mavlink.sysid = 1;
 cfg.mavlink.compid = 1;
-cfg.mavlink.backend = "stub";
+cfg.mavlink.backend = "pymavlink";
 
 cfg.init.lat_deg = 0;
 cfg.init.lon_deg = 0;
@@ -39,4 +39,5 @@ cfg.elevon_deg_table = linspace(-30, 30, 1000);
 cfg.elevon.min_rad = [];
 cfg.elevon.max_rad = [];
 end
+
 

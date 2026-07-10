@@ -9,6 +9,7 @@ hitl_dir = fileparts(mfilename("fullpath"));
 root_dir = fileparts(hitl_dir);
 addpath(hitl_dir);
 addpath(fullfile(hitl_dir, "utils"));
+addpath(fullfile(hitl_dir, "mavlink_backend"));
 addpath(fullfile(root_dir, "matlab_model"));
 
 cfg = hitl_config();
@@ -47,3 +48,4 @@ while t < max_time_s
     t = t + cfg.dt;
 end
 end
+

@@ -13,7 +13,7 @@ Implemented for this phase:
 - RX: MAVLink v2 `SERVO_OUTPUT_RAW`
 - Mixer1 PWM-to-actuator mapping
 - Open-loop calls into `tandem_zx_dynamics`
-- TX payload packing for `HIL_STATE_QUATERNION`
+- TX MAVLink v2 `HIL_STATE_QUATERNION`
 - Serial helpers for raw `uint8` bytes
 - 1:1 wall-clock pacer
 - Hardware-free MATLAB tests
@@ -24,42 +24,97 @@ Not implemented in this phase:
 - `HIL_GPS`
 - `HIL_ACTUATOR_CONTROLS`
 
+## MAVLink backend
+
+Current backend:
+
+```matlab
+cfg.mavlink.backend = "pymavlink";
+```
+
+MATLAB is configured to use Python. Install the backend package into the same Python environment MATLAB reports from `pyenv`:
+
+```powershell
+D:\Python\Python3.12.4\python.exe -m pip install pymavlink
+```
+
+Or generally:
+
+```powershell
+pip install pymavlink
+```
+
+Verify from MATLAB:
+
+```matlab
+pyenv
+py.importlib.import_module("pymavlink")
+```
+
+The bridge code lives in `HITL/mavlink_backend/`:
+
+- `pymavlink_bridge.py`
+- `mavlink_backend_init.m`
+- `pymavlink_decode_servo_output_raw.m`
+- `pymavlink_encode_hil_state_quaternion.m`
+
+`stub` is still kept as a diagnostic mode; it reports a clear error and is not for real communication.
+
 ## User-supplied parameters still required
 
-Fill these in `hitl_config.m` before real hardware use:
+Confirm these in `hitl_config.m` before real hardware use:
 
-- `servo5_raw` and `servo6_raw` 1-D Lookup Table breakpoints and values:
-  - `cfg.elevon_pwm_breakpoints`
-  - `cfg.elevon_deg_table`
-- Real `SYS_ID` and `COMP_ID`
+- `cfg.mavlink.sysid`
+- `cfg.mavlink.compid`
 - Initial `lat_deg`, `lon_deg`, and `AMSL`, unless available in `param.InitData`
-- MAVLink backend choice: `pymavlink`, `mavlink_c`, MATLAB UAV Toolbox, or another adapter
-- Confirm whether the serial port is still `COM4` at `115200`
+- Whether the serial port is still `COM4` at `115200`
+- PX4/Nora is streaming `SERVO_OUTPUT_RAW` on that link
+- The elevon lookup table. Current setting is:
 
-The default backend is `stub`. Decode and encode functions intentionally report a clear error when real bytes must be parsed or produced.
+```matlab
+cfg.elevon_pwm_breakpoints = linspace(1000, 2000, 1000);
+cfg.elevon_deg_table = linspace(-30, 30, 1000);
+```
 
 ## Run order
 
-1. Run `HITL/tests/run_all_hitl_tests.m`.
-2. Fill the elevon lookup table in `hitl_config.m`.
-3. Set `cfg.mavlink.backend` and implement/connect the selected backend in the two MAVLink functions.
-4. Confirm `COM4 @ 115200` is available.
-5. Connect Nora/PX4.
-6. Run `hitl_main.m`.
-
-Example:
+1. Run the no-hardware tests:
 
 ```matlab
 cd('D:/D_zx/26WORK/ShengTai/0710HITL_ST/STaircraft/HITL/tests')
 run_all_hitl_tests
 ```
 
-For a bounded smoke run after the backend is connected:
+2. Test MAVLink encode only:
+
+```matlab
+cd('D:/D_zx/26WORK/ShengTai/0710HITL_ST/STaircraft/HITL/tests')
+test_mavlink_encode_hil_state_quaternion
+```
+
+3. Test serial + MAVLink only, without the dynamics model:
+
+```matlab
+cd('D:/D_zx/26WORK/ShengTai/0710HITL_ST/STaircraft/HITL/tests')
+test_serial_mavlink_io
+```
+
+4. After serial receive/transmit is confirmed, run the bounded HITL loop:
 
 ```matlab
 cd('D:/D_zx/26WORK/ShengTai/0710HITL_ST/STaircraft/HITL')
 hitl_main(10)
 ```
+
+## Common issues
+
+- `COM4` is occupied by QGroundControl or another program.
+- The PX4 serial baudrate is not `115200`.
+- PX4 is not outputting `SERVO_OUTPUT_RAW` on this MAVLink instance.
+- PX4 is not in the expected HITL/simulation configuration.
+- `SYS_ID` or `COMP_ID` does not match the expected vehicle setup.
+- MATLAB's Python environment does not have `pymavlink` installed.
+- Bytes are arriving but no `SERVO_OUTPUT_RAW` is parsed; the stream may be disabled or the message type may be different.
 
 ## Notes and known limits
 
