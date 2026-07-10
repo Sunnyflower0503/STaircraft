@@ -135,7 +135,7 @@ for ip = 1:8
     end
 
     if slipstream_enable && get_optional_field(param, 'slipstream_ff_enable', true)
-        f_s = slipstream_lift_factor(slip_state.Ve_s, Va, alpha_slip, param);
+        f_s = slipstream_lift_factor(slip_state.Ve_s, slip_state.Vinf, alpha_slip, param);
     else
         f_s = 1;
     end
@@ -220,7 +220,7 @@ else
     beta_s = 0;
 end
 
-state = struct('Vi0', Vi0, 'Vi_eff', Vi_eff, 'Rs', Rs, 'Ve_s', Ve_s, ...
+state = struct('Vinf', Vinf, 'Vi0', Vi0, 'Vi_eff', Vi_eff, 'Rs', Rs, 'Ve_s', Ve_s, ...
                'alpha_s', alpha_s, 'beta_s', beta_s);
 end
 
