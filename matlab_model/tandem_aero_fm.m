@@ -25,13 +25,12 @@ Va_b = DCM_eb * (Ve - param.wind(:));
 Va = norm(Va_b);
 
 if Va < 1e-9
-    f_a = zeros(3, 1);
-    m_a = zeros(3, 1);
-    return;
+    alpha = 0;
+    beta = 0;
+else
+    alpha = atan2(Va_b(3), Va_b(1));
+    beta = atan2(Va_b(2), hypot(Va_b(1), Va_b(3)));
 end
-
-alpha = atan2(Va_b(3), Va_b(1));
-beta = atan2(Va_b(2), hypot(Va_b(1), Va_b(3)));
 qbar = 0.5 * param.rho * Va^2;
 
 S = param.S;
@@ -40,9 +39,15 @@ b = param.b;
 MAC = param.MAC;
 
 alpha_dyn = min(max(alpha, -0.5), 0.5);
-p_hat = omega_b(1) * b / (2 * Va);
-q_hat = omega_b(2) * MAC / (2 * Va);
-r_hat = omega_b(3) * b / (2 * Va);
+if Va < 1e-9
+    p_hat = 0;
+    q_hat = 0;
+    r_hat = 0;
+else
+    p_hat = omega_b(1) * b / (2 * Va);
+    q_hat = omega_b(2) * MAC / (2 * Va);
+    r_hat = omega_b(3) * b / (2 * Va);
+end
 alpha_dot_hat = get_optional_field(param, 'alpha_dot_hat', 0);
 
 K = aero_enable(mode_out);
@@ -90,27 +95,94 @@ M_sw = K * qbar * S * [b * Cl_dyn; MAC * Cm_dyn; b * Cn_dyn];
 
 %% S_slip force panels: S184-S191
 F_slip = zeros(3, 1);
+slipstream_enable = get_optional_field(param, 'slipstream_enable', true);
 for ip = 1:8
-    Va_local_b = Va_b;
+    if slipstream_enable
+        dt_i = sat(delta_t(ip), get_optional_field(param, 'rotor_throttle_min', 0), 1);
+        [~, ~, n_rps_i, CT_i] = tandem_rotor_thrust(dt_i, alpha, beta, Va, ...
+                                                   param.prop_spin(ip), param, ...
+                                                   param.prop_angle(ip));
+        Va_local_b = slipstream_local_velocity(n_rps_i, CT_i, param.prop_angle(ip), Va_b, param);
+    else
+        Va_local_b = Va_b;
+    end
+
     alpha_slip = alpha;
+    beta_slip = beta;
+    Va_slip = norm(Va_local_b);
     qbar_slip = qbar;
 
+    if Va_slip >= 1e-9
+        alpha_local = atan2(Va_local_b(3), Va_local_b(1));
+        beta_local = atan2(Va_local_b(2), hypot(Va_local_b(1), Va_local_b(3)));
+    else
+        alpha_local = alpha;
+        beta_local = beta;
+    end
+
     if get_optional_field(param, 'alpha_slip_switch', 1) > 0.5
-        alpha_slip = atan2(Va_local_b(3), Va_local_b(1));
+        alpha_slip = alpha_local;
+        beta_slip = beta_local;
     end
 
     if get_optional_field(param, 'DP_slip_switch', 1) > 0.5
-        qbar_slip = 0.5 * param.rho * dot(Va_local_b, Va_local_b);
+        qbar_slip = 0.5 * param.rho * Va_slip^2;
+    end
+
+    if slipstream_enable && get_optional_field(param, 'slipstream_ff_enable', true)
+        f_f = slipstream_force_factor(Va_local_b(1), Va_b, alpha_slip);
+    else
+        f_f = 1;
     end
 
     CD_slip = aero_cd(param, alpha_slip);
     CL_slip = aero_cl(param, alpha_slip);
-    CA_slip = aeroforce2bodyaxis(alpha, beta, CD_slip, 0, CL_slip);
-    F_slip = F_slip + qbar_slip * param.S_slip(ip) * CA_slip;
+    CA_slip = aeroforce2bodyaxis(alpha_slip, beta_slip, CD_slip, 0, CL_slip);
+    F_slip = F_slip + f_f * qbar_slip * param.S_slip(ip) * CA_slip;
 end
 
 f_a = F_elevon + F_sfree + F_sw + F_slip;
 m_a = M_elevon + M_sfree + M_sw;
+end
+
+function Va_local_b = slipstream_local_velocity(n_rps, CT, prop_angle, Va_b, param)
+Va_local_b = Va_b;
+if n_rps <= 0 || CT <= 0
+    return;
+end
+
+D = get_optional_field(param, 'prop_D', 0.2032);
+a0 = get_optional_field(param, 'slipstream_a0', 1.59 / 2);
+Vi = a0 * n_rps * D * sqrt(max(CT, 0));
+
+Va_local_b(1) = Va_b(1) + Vi * cos(prop_angle);
+Va_local_b(3) = Va_b(3) - Vi * sin(prop_angle);
+end
+
+function f_f = slipstream_force_factor(u_e, Va_b, alpha_slip)
+u_inf = Va_b(1);
+den = u_e^2 + u_inf^2;
+if den <= 1e-12
+    f_f = 1;
+    return;
+end
+
+a0 = 0.3 / (0.5 * 0.2032);
+a1 = 0.5;
+lambda = (u_e^2 - u_inf^2) / den;
+sa = sin(alpha_slip);
+
+sigma = 1 ...
+    + lambda / (1 + 4 * a1^2 / a0^2 + 4 * a1 / a0 * sa) ...
+    + lambda / (1 + 4 * a1^2 / a0^2 - 4 * a1 / a0 * sa) ...
+    + lambda^2 / (1 + 4 / a0^2 + 4 / a0 * sa) ...
+    + lambda^2 / (1 + 4 / a0^2 - 4 / a0 * sa);
+
+if abs(sigma) <= 1e-12
+    f_f = 1;
+else
+    f_f = 1 / sigma;
+end
 end
 
 function K = aero_enable(mode_out)

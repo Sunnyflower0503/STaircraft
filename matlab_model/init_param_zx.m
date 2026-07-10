@@ -20,6 +20,8 @@ param.MAC = 0.3;                       % 平均气动弦长 [m]
 param.S_slip = [0.03048 0.06858 0.06858 0.03048 0.03048 0.06858 0.06858 0.03048];
 param.S_slip_y = [-0.58 -0.175 0.175 0.58 -0.58 -0.175 0.175 0.58];
 param.S_free = param.S - sum(param.S_slip);
+param.slipstream_enable = true;        % 是否考虑 8 个主桨滑流区气动力
+param.slipstream_ff_enable = true;     % 是否使用滑流区 f_f 修正系数；false 时 f_f=1
 param.alpha_slip_switch = 1;
 param.DP_slip_switch = 1;
 
