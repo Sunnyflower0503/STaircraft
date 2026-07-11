@@ -25,6 +25,8 @@ fprintf("========================================\n");
 cfg = hitl_config();
 cfg.model.force_enable = 0;
 cfg.model.init_mode = "stand_static";
+cfg_flight = cfg;
+cfg_flight.model.force_enable = 1;
 
 param = init_param_zx();
 [param, x, u, meta] = prepare_stand_static_for_hitl(param, cfg);
@@ -49,19 +51,27 @@ fprintf("[HITL TAKEOFF] User config: loaded=%d mode=%s enable_override=%d applie
 
 stats = init_takeoff_stats(cfg, meta, x, uav0);
 state = initial_stand_takeoff_state();
+history = init_history();
+history_sample_period_s = 0.1;
+last_history_sample_s = -Inf;
 last_servo_raw = nan(1, 8);
 last_servo_rx_s = NaN;
 last_print_s = 0;
-sim_time = 0;
-n_substeps = round(cfg.sample_time / cfg.dt);
+last_wall_time_s = 0;
+plant_time_s = 0;
+flight_wall_time_s = 0;
 first_servo_reported = false;
 no_servo_warning_printed = false;
 stop_after_landing = false;
 ser = [];
-cleanup_obj = onCleanup(@() cleanup_run(hitl_dir, stats, ser));
+runtime = containers.Map("KeyType", "char", "ValueType", "any");
+runtime("stats") = stats;
+runtime("ser") = ser;
+cleanup_obj = onCleanup(@() cleanup_run(hitl_dir, runtime));
 
 try
     ser = serial_open(cfg);
+    runtime("ser") = ser;
 catch ME
     fprintf(2, "\n[HITL TAKEOFF] Failed to open %s @ %d baud.\n", cfg.serial.port, cfg.serial.baudrate);
     fprintf(2, "Check:\n");
@@ -79,6 +89,8 @@ t_start = tic;
 while ~stop_after_landing
     loop_tic = tic;
     wall_time_s = toc(t_start);
+    state_dt_s = max(0, wall_time_s - last_wall_time_s);
+    last_wall_time_s = wall_time_s;
 
     bytes = serial_read_bytes(ser);
     stats.rx_bytes_total = stats.rx_bytes_total + numel(bytes);
@@ -88,7 +100,7 @@ while ~stop_after_landing
     catch ME
         stats.decode_error_count = stats.decode_error_count + 1;
         servo_msg = empty_servo_msg();
-        fprintf(2, "[HITL TAKEOFF] decode error at wall_time=%.3fs: %s\n", wall_time_s, ME.message);
+        fprintf(2, "[HITL TAKEOFF] decode error at wall_t=%.3fs: %s\n", wall_time_s, ME.message);
     end
 
     if servo_msg.is_new
@@ -109,25 +121,36 @@ while ~stop_after_landing
 
     main_throttle = mean(u(1:8));
 
-    [x, sim_time, n_substeps] = advance_hitl_dynamics_substeps(x, u, param, cfg, sim_time, state.stand_released);
+    plant_step_s = 0;
+    if state.stand_released
+        flight_wall_time_s = flight_wall_time_s + state_dt_s;
+        plant_step_s = min(state_dt_s, cfg.model.max_runtime_step_s);
+        x = integrate_aircraft_step(plant_time_s, x, u, param, cfg_flight, plant_step_s);
+        plant_time_s = plant_time_s + plant_step_s;
+    end
 
     contact_diag = hitl_ground_contact_diagnostics(x, param);
-    state = stand_takeoff_state_step(state, main_throttle, contact_diag.active_contact_count, n_substeps * cfg.dt, cfg);
+    if state.stand_released
+        state_step_s = plant_step_s;
+    else
+        state_step_s = state_dt_s;
+    end
+    state = stand_takeoff_state_step(state, main_throttle, contact_diag.active_contact_count, state_step_s, cfg);
 
     if state.just_released
-        fprintf("[HITL] Stand released: throttle=%.3f t=%.3f\n", main_throttle, sim_time);
+        fprintf("[HITL] Stand released: throttle=%.3f t=%.3f\n", main_throttle, wall_time_s);
     end
     if state.just_liftoff_confirmed
-        fprintf("[HITL] Liftoff confirmed at t=%.3f\n", sim_time);
+        fprintf("[HITL] Liftoff confirmed at t=%.3f\n", plant_time_s);
     end
     if state.just_landing_confirmed
         fprintf("[HITL] Landing confirmed: active_contact_count=%d/6 at t=%.3f\n", ...
-            contact_diag.active_contact_count, sim_time);
+            contact_diag.active_contact_count, plant_time_s);
         fprintf("[HITL] Simulation stopped after landing.\n");
         stop_after_landing = true;
     end
 
-    uav = state_to_uavdata_like(sim_time, x, u, param, cfg);
+    uav = state_to_uavdata_like(plant_time_s, x, u, param, cfg);
     payload = uavdata_to_hil_state_quaternion_payload(uav, cfg);
     tx_bytes = mavlink_encode_hil_state_quaternion(payload, cfg);
     serial_write_bytes(ser, tx_bytes);
@@ -135,9 +158,10 @@ while ~stop_after_landing
     stats.tx_bytes_total = stats.tx_bytes_total + numel(tx_bytes);
     stats.hil_state_quaternion_tx_count = stats.hil_state_quaternion_tx_count + 1;
     stats.duration_s_actual = wall_time_s;
-    stats.sim_time = sim_time;
-    stats.sim_speed_ratio = sim_time / max(wall_time_s, eps);
-    stats.n_substeps = n_substeps;
+    stats.flight_wall_time_s = flight_wall_time_s;
+    stats.plant_time_s = plant_time_s;
+    stats.plant_time_lag_s = max(0, flight_wall_time_s - plant_time_s);
+    stats.max_runtime_step_s = cfg.model.max_runtime_step_s;
     stats.phase = state.phase;
     stats.stand_released = state.stand_released;
     stats.liftoff_confirmed = state.liftoff_confirmed;
@@ -150,6 +174,13 @@ while ~stop_after_landing
     stats.lon_deg = uav.lon_deg;
     stats.AMSL = uav.AMSL;
 
+    if wall_time_s - last_history_sample_s >= history_sample_period_s
+        history = append_history(history, stats);
+        stats.history = history;
+        runtime("stats") = stats;
+        last_history_sample_s = wall_time_s;
+    end
+
     if ~first_servo_reported && ~no_servo_warning_printed && wall_time_s >= 5
         fprintf(2, "No SERVO_OUTPUT_RAW received yet.\n");
         fprintf(2, "Check:\n");
@@ -161,9 +192,9 @@ while ~stop_after_landing
     end
 
     if wall_time_s - last_print_s >= 1
-        fprintf("[HITL TAKEOFF] sim_time=%.3fs wall_time=%.3fs sim_speed_ratio=%.3f n_substeps=%d phase=%s throttle=%.3f stand_released=%d liftoff=%d contacts=%d/6 servo=[%s] u1_8=[%s] pos=[%.2f %.2f %.2f] vel=[%.2f %.2f %.2f] Euler=[%.2f %.2f %.2f]\n", ...
-            sim_time, wall_time_s, stats.sim_speed_ratio, n_substeps, string(state.phase), main_throttle, logical(state.stand_released), ...
-            logical(state.liftoff_confirmed), contact_diag.active_contact_count, ...
+        fprintf("[HITL TAKEOFF] wall_t=%.3fs plant_t=%.3fs lag=%.3fs phase=%s throttle=%.3f stand_released=%d liftoff=%d contacts=%d/6 servo=[%s] u1_8=[%s] pos=[%.2f %.2f %.2f] vel=[%.2f %.2f %.2f] Euler=[%.2f %.2f %.2f]\n", ...
+            wall_time_s, plant_time_s, stats.plant_time_lag_s, string(state.phase), main_throttle, ...
+            logical(state.stand_released), logical(state.liftoff_confirmed), contact_diag.active_contact_count, ...
             sprintf("%.0f ", last_servo_raw), sprintf("%.3f ", u(1:8)), ...
             x(1), x(2), x(3), x(4), x(5), x(6), ...
             stats.euler_deg(1), stats.euler_deg(2), stats.euler_deg(3));
@@ -178,6 +209,9 @@ while ~stop_after_landing
         pause(cfg.sample_time - loop_time_s);
     end
 end
+
+stats.history = history;
+runtime("stats") = stats;
 
 function stats = init_takeoff_stats(cfg, meta, x, uav0)
 stats = struct();
@@ -208,10 +242,34 @@ stats.lat_deg = uav0.lat_deg;
 stats.lon_deg = uav0.lon_deg;
 stats.AMSL = uav0.AMSL;
 stats.duration_s_actual = 0;
-stats.sim_time = 0;
-stats.sim_speed_ratio = NaN;
-stats.n_substeps = round(cfg.sample_time / cfg.dt);
+stats.flight_wall_time_s = 0;
+stats.plant_time_s = 0;
+stats.plant_time_lag_s = 0;
+stats.max_runtime_step_s = cfg.model.max_runtime_step_s;
+stats.history_sample_period_s = 0.1;
+stats.history = init_history();
 stats.log_file = "";
+end
+
+function history = init_history()
+history = struct();
+history.wall_time_s = zeros(1, 0);
+history.plant_time_s = zeros(1, 0);
+history.position_ned = zeros(3, 0);
+history.velocity_ned = zeros(3, 0);
+history.main_throttle = zeros(1, 0);
+history.active_contact_count = zeros(1, 0);
+history.phase = strings(1, 0);
+end
+
+function history = append_history(history, stats)
+history.wall_time_s(end + 1) = stats.duration_s_actual;
+history.plant_time_s(end + 1) = stats.plant_time_s;
+history.position_ned(:, end + 1) = stats.position_ned(:);
+history.velocity_ned(:, end + 1) = stats.velocity_ned(:);
+history.main_throttle(end + 1) = stats.main_throttle;
+history.active_contact_count(end + 1) = stats.active_contact_count;
+history.phase(end + 1) = string(stats.phase);
 end
 
 function msg = empty_servo_msg()
@@ -234,8 +292,10 @@ yaw = atan2(R_eb(2, 1), R_eb(1, 1));
 euler_deg = rad2deg([roll; pitch; yaw]);
 end
 
-function cleanup_run(hitl_dir, stats, ser)
+function cleanup_run(hitl_dir, runtime)
+stats = runtime("stats");
 try
+    ser = runtime("ser");
     if ~isempty(ser)
         clear ser;
     end

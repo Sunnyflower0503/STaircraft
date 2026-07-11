@@ -110,6 +110,15 @@ Runtime phases:
 
 The script does not send `MAV_CMD_COMPONENT_ARM_DISARM`; PX4 arming remains manual in QGC or RC. Ground/landing decisions use the existing six permanent contact-point diagnostics from `zx_ground_contact_force(..., info.active)`, not height estimates. The removable stand is only part of the cached initial condition and disappears permanently after release.
 
+Runtime time alignment:
+
+- `cfg.sample_time = 0.01 s` is the HITL communication/main-loop target period.
+- `cfg.dt = 0.001 s` remains available for high-resolution offline stand settling and model studies.
+- Online takeoff does not integrate only `cfg.dt` per main loop. After stand release, it measures the actual wall-clock loop interval and advances plant dynamics by that interval.
+- A single runtime integration step is capped by `cfg.model.max_runtime_step_s = 0.05 s` to avoid a large RK4 step after an OS, serial, or Python stall.
+- Console output prints `wall_t`, `plant_t`, and `lag`. In `STAND_HOLD`, `plant_t=0` is expected. In `FLIGHT`, `lag` should usually stay near zero; sustained growth means the loop is not keeping up.
+- Run logs include a 10 Hz `history` struct with `wall_time_s`, `plant_time_s`, `position_ned`, `velocity_ned`, `main_throttle`, `active_contact_count`, and `phase`.
+
 Key configuration in `hitl_config.m`:
 
 ```matlab
@@ -118,9 +127,10 @@ cfg.stand.release_hold_s = 0.1;
 cfg.landing.liftoff_confirm_s = 0.05;
 cfg.landing.min_active_contacts = 5;
 cfg.landing.confirm_s = 0.1;
+cfg.model.max_runtime_step_s = 0.05;
 ```
 
-Each second the runner prints phase, throttle, stand/liftoff flags, active contact count, `servo1`-`servo8`, `u(1:8)`, position, velocity, and Euler angles. Logs are saved under:
+Each second the runner prints `wall_t`, `plant_t`, `lag`, phase, throttle, stand/liftoff flags, active contact count, `servo1`-`servo8`, `u(1:8)`, position, velocity, and Euler angles. Logs are saved under:
 
 ```text
 HITL/logs/run_hitl_stand_takeoff_yyyymmdd_HHMMSS.mat

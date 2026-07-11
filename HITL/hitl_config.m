@@ -8,6 +8,7 @@ cfg.pace = 1;
 cfg.model.force_enable = 0;
 cfg.model.init_mode = "stand_static";
 cfg.model.zero_force_mode = "freeze";
+cfg.model.max_runtime_step_s = 0.05;
 
 cfg.runtime_control.enable_file_control = true;
 cfg.runtime_control.file = fullfile(fileparts(mfilename("fullpath")), "runtime_control.txt");
