@@ -14,11 +14,20 @@ addpath(fullfile(root_dir, "matlab_model"));
 
 cfg = hitl_config();
 param = init_param_zx();
-x = initial_state_from_param(param, cfg);
-u = zeros(12, 1);
+if string(cfg.model.init_mode) == "stand_static"
+    [param, x, u, meta] = prepare_stand_static_for_hitl(param, cfg);
+else
+    x = initial_state_from_param(param, cfg);
+    u = zeros(12, 1);
+    meta = struct("mode", string(cfg.model.init_mode), "euler_deg", [NaN; NaN; NaN]);
+end
+
 uav0 = state_to_uavdata_like(0, x, u, param, cfg);
-fprintf("HITL initial position: lat=%.6f lon=%.6f AMSL=%.0f heading=%.0f\n", ...
+fprintf("[HITL] Initial geodetic position:\nlat=%.6f lon=%.6f AMSL=%.0f heading=%.0f\n", ...
     uav0.lat_deg, uav0.lon_deg, uav0.AMSL, cfg.init.heading_deg);
+fprintf("[HITL] Initial mode:\nforce_enable=%d init_mode=%s stand_euler=[%.2f %.2f %.2f]\n", ...
+    cfg.model.force_enable, string(cfg.model.init_mode), meta.euler_deg(1), meta.euler_deg(2), meta.euler_deg(3));
+
 ser = serial_open(cfg);
 cleanup = onCleanup(@() clear("ser")); %#ok<NASGU>
 
@@ -46,10 +55,7 @@ while t < max_time_s
         last_print_t = t;
     end
 
-    pacer_state = real_time_pacer(pacer_state, t + cfg.dt, cfg);
-    t = t + cfg.dt;
+    pacer_state = real_time_pacer(pacer_state, t + cfg.sample_time, cfg);
+    t = t + cfg.sample_time;
 end
 end
-
-
-

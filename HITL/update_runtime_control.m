@@ -1,5 +1,5 @@
 function cfg = update_runtime_control(cfg, t)
-%UPDATE_RUNTIME_CONTROL Poll runtime_control.txt for live HITL switches.
+%UPDATE_RUNTIME_CONTROL Poll runtime_control.txt for force_enable.
 
 persistent last_check_t last_force_enable
 
@@ -25,11 +25,11 @@ if ~isfile(control_file)
 end
 
 try
-    text = strtrim(fileread(control_file));
+    text = fileread(control_file);
     token = regexp(text, "force_enable\s*=\s*([01])", "tokens", "once");
     if isempty(token)
         warning("update_runtime_control:BadFormat", ...
-            "Ignoring runtime control file with invalid format: %s", control_file);
+            "Ignoring runtime control file with no force_enable entry: %s", control_file);
         return;
     end
 

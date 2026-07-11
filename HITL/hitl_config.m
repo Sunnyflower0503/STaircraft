@@ -2,10 +2,11 @@ function cfg = hitl_config()
 %HITL_CONFIG Configuration for the MATLAB HITL adapter layer.
 
 cfg.sample_time = 0.01;
-cfg.dt = 0.01;
+cfg.dt = 0.001;
 cfg.pace = 1;
 
 cfg.model.force_enable = 0;
+cfg.model.init_mode = "stand_static";
 cfg.model.zero_force_mode = "freeze";
 
 cfg.runtime_control.enable_file_control = true;
@@ -40,6 +41,12 @@ cfg.init.AMSL = 500;
 cfg.init.heading_deg = 0;
 cfg.init.use_param_geodetic = false;
 
+cfg.stand.angle_deg = 40;
+cfg.stand.settle_time_s = 20;
+cfg.stand.use_cached_settled_state = true;
+cfg.stand.cache_file = fullfile(fileparts(mfilename("fullpath")), ...
+    "cache", "stand_static_settled_state.mat");
+
 cfg.env.rho0 = 1.225;
 cfg.env.earth_radius = 6378137.0;
 cfg.env.g = 9.80665;
@@ -53,6 +60,3 @@ cfg.elevon_deg_table = linspace(-30, 30, 1000);
 cfg.elevon.min_rad = [];
 cfg.elevon.max_rad = [];
 end
-
-
-
