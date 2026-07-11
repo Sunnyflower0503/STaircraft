@@ -41,6 +41,28 @@ cfg.init.AMSL = 500;
 cfg.init.heading_deg = 0;
 cfg.init.use_param_geodetic = false;
 
+cfg.user.loaded = false;
+cfg.user.config_file = fullfile(fileparts(mfilename("fullpath")), "user_hitl_config.m");
+cfg.user.serial.port = cfg.serial.port;
+cfg.user.serial.baudrate = cfg.serial.baudrate;
+cfg.user.init.lat_deg = cfg.init.lat_deg;
+cfg.user.init.lon_deg = cfg.init.lon_deg;
+cfg.user.init.AMSL = cfg.init.AMSL;
+cfg.user.init.heading_deg = cfg.init.heading_deg;
+cfg.user.ic.enable_override = false;
+cfg.user.ic.mode = "stand_cache";
+cfg.user.ic.Xe_NED_m = [0; 0; 0];
+cfg.user.ic.Vb_mps = [0; 0; 0];
+cfg.user.ic.Euler_deg = [0; 37.593422; 0];
+cfg.user.ic.pqr_radps = [0; 0; 0];
+cfg.user.ic.u0 = zeros(12, 1);
+cfg.user.ic.override_position = false;
+cfg.user.ic.override_velocity = false;
+cfg.user.ic.override_attitude = false;
+cfg.user.ic.override_rates = false;
+cfg.user.ic.override_u0 = false;
+cfg.ic = cfg.user.ic;
+
 cfg.stand.angle_deg = 40;
 cfg.stand.settle_time_s = 20;
 cfg.stand.use_cached_settled_state = true;
@@ -59,4 +81,56 @@ cfg.elevon_pwm_breakpoints = linspace(1000, 2000, 1000);
 cfg.elevon_deg_table = linspace(-30, 30, 1000);
 cfg.elevon.min_rad = [];
 cfg.elevon.max_rad = [];
+
+cfg = apply_user_hitl_config(cfg);
+end
+
+function cfg = apply_user_hitl_config(cfg)
+config_file = cfg.user.config_file;
+if ~isfile(config_file)
+    return;
+end
+
+try
+    user = user_hitl_config();
+catch ME
+    warning("hitl_config:UserConfigReadFailed", ...
+        "Could not read %s: %s. Using defaults.", config_file, ME.message);
+    return;
+end
+
+if ~isstruct(user)
+    warning("hitl_config:BadUserConfig", ...
+        "user_hitl_config must return a struct. Using defaults.");
+    return;
+end
+
+cfg.user = merge_user_struct(cfg.user, user);
+cfg.user.loaded = true;
+cfg.user.config_file = config_file;
+
+if isfield(cfg.user, "serial")
+    cfg.serial = merge_user_struct(cfg.serial, cfg.user.serial);
+end
+if isfield(cfg.user, "init")
+    cfg.init = merge_user_struct(cfg.init, cfg.user.init);
+end
+cfg.ic = cfg.user.ic;
+end
+
+function target = merge_user_struct(target, source)
+if ~isstruct(source)
+    return;
+end
+names = fieldnames(source);
+for k = 1:numel(names)
+    name = names{k};
+    if isfield(target, name) && isstruct(target.(name)) && isstruct(source.(name))
+        target.(name) = merge_user_struct(target.(name), source.(name));
+    elseif isfield(target, name) || ~isstruct(target)
+        target.(name) = source.(name);
+    else
+        target.(name) = source.(name);
+    end
+end
 end

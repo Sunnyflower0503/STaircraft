@@ -59,6 +59,18 @@ heading = 0 deg
 
 `state_to_uavdata_like` treats `cfg.init` as the default geodetic reference origin.
 
+## User Editable Configuration / 用户可编辑配置
+
+Edit `HITL/user_hitl_config.m` for normal lab setup changes. This avoids changing internal HITL scripts.
+
+- `user.serial.port` and `user.serial.baudrate`: MATLAB serial link settings.
+- `user.init.lat_deg`, `lon_deg`, `AMSL`, and `heading_deg`: initial HIL geodetic reference.
+- `user.ic.Euler_deg`, `Vb_mps`, and `pqr_radps`: editable initial attitude, body velocity, and body rates.
+
+The default `user.ic.mode = "stand_cache"` preserves the validated cached stand-static state. To replace only selected cached values, set `user.ic.enable_override = true` and the matching `override_position`, `override_velocity`, `override_attitude`, `override_rates`, or `override_u0` flag to `true`.
+
+Set `user.ic.mode = "manual"` to construct the complete initial state from `Xe_NED_m`, `Vb_mps`, `Euler_deg`, `pqr_radps`, and `u0`. `Vb_mps` is body-frame velocity; HITL converts it to the NED velocity state using the configured attitude. Quaternion ordering remains `[qw; qx; qy; qz]`.
+
 ## One-Click Run Script / 一键运行脚本
 
 Use this script like pressing Run in the former Simulink HITL model:

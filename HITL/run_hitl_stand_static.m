@@ -28,6 +28,7 @@ cfg.model.init_mode = "stand_static";
 
 param = init_param_zx();
 [param, x, u, meta] = prepare_stand_static_for_hitl(param, cfg);
+[x, u, meta] = apply_user_initial_conditions(x, u, cfg, param, meta);
 uav0 = state_to_uavdata_like(0, x, u, param, cfg);
 
 fprintf("[HITL RUN] Stand state prepared.\n");
@@ -37,6 +38,10 @@ fprintf("  omega norm    : %.3g rad/s\n", meta.angular_rate_norm);
 fprintf("  cache_used    : %d\n", logical(meta.cache_used));
 fprintf("  cache_file    : %s\n", string(meta.cache_file));
 fprintf("  lat/lon/AMSL  : %.6f %.6f %.0f\n", uav0.lat_deg, uav0.lon_deg, uav0.AMSL);
+fprintf("[HITL RUN] User config: loaded=%d mode=%s enable_override=%d applied=[%s]\n", ...
+    logical(meta.user_initial_conditions.config_loaded), ...
+    meta.user_initial_conditions.mode, logical(meta.user_initial_conditions.enable_override), ...
+    strjoin(meta.user_initial_conditions.applied_fields, ", "));
 
 stats = init_run_stats(cfg, meta, x, uav0);
 last_servo_raw = nan(1, 8);

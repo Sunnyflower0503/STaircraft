@@ -21,6 +21,7 @@ else
     u = zeros(12, 1);
     meta = struct("mode", string(cfg.model.init_mode), "euler_deg", [NaN; NaN; NaN]);
 end
+[x, u, meta] = apply_user_initial_conditions(x, u, cfg, param, meta);
 
 uav0 = state_to_uavdata_like(0, x, u, param, cfg);
 fprintf("[HITL] Initial geodetic position:\nlat=%.6f lon=%.6f AMSL=%.0f heading=%.0f\n", ...
