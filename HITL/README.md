@@ -106,6 +106,43 @@ cd('D:/D_zx/26WORK/ShengTai/0710HITL_ST/STaircraft/HITL')
 hitl_main(10)
 ```
 
+## Runtime force control
+
+`hitl_main` can switch model forces on or off while MATLAB keeps running. Edit this file during runtime:
+
+```text
+HITL/runtime_control.txt
+```
+
+Set:
+
+```text
+force_enable=0
+```
+
+to disable model force integration. With the default:
+
+```matlab
+cfg.model.zero_force_mode = "freeze";
+```
+
+the aircraft state is held fixed.
+
+Set:
+
+```text
+force_enable=1
+```
+
+to enable full dynamics force integration through `Runge_Kutta4(@tandem_zx_dynamics, ...)`.
+
+After saving `runtime_control.txt`, `hitl_main` polls the file about every `0.2` seconds and prints a switch log such as:
+
+```text
+[HITL runtime] t=12.40 force_enable: 0 -> 1
+```
+
+Switching `force_enable` from `0` to `1` can produce a transient. It is better to confirm stable `SERVO_OUTPUT_RAW` reception before enabling full model forces.
 ## Common issues
 
 - `COM4` is occupied by QGroundControl or another program.
@@ -123,3 +160,4 @@ hitl_main(10)
 - `ab` is currently estimated from model acceleration minus gravity and transformed to body axes. TODO: confirm this matches the original Simulink specific-force convention exactly.
 - Whether `HIL_STATE_QUATERNION` alone is sufficient for the current PX4 HITL setup must be confirmed on the real vehicle configuration.
 - MATLAB real-time behavior is suitable for chain reproduction and validation, but it is not equivalent to a hard real-time C++ bridge.
+

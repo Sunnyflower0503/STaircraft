@@ -24,13 +24,12 @@ t = 0;
 last_print_t = -inf;
 
 while t < max_time_s
+    cfg = update_runtime_control(cfg, t);
     bytes = serial_read_bytes(ser);
     servo_msg = mavlink_decode_servo_output_raw(bytes, cfg);
     u = actuator_from_servo_output_raw(servo_msg, u, cfg);
 
-    [~, z] = Runge_Kutta4(@(tt, xx) tandem_zx_dynamics(tt, xx, u, param), [t t + cfg.dt], x);
-    x = z(:, end);
-    x(7:10) = quat_normalize(x(7:10));
+    x = integrate_aircraft_step(t, x, u, param, cfg);
 
     uav = state_to_uavdata_like(t, x, u, param, cfg);
     payload = uavdata_to_hil_state_quaternion_payload(uav, cfg);
@@ -38,9 +37,9 @@ while t < max_time_s
     serial_write_bytes(ser, tx_bytes);
 
     if t - last_print_t >= 1
-        fprintf("t=%.2f is_new=%d u_throttle=[%s] lat=%.7f lon=%.7f AMSL=%.2f TAS=%.2f EAS=%.2f\n", ...
+        fprintf("t=%.2f is_new=%d u_throttle=[%s] lat=%.7f lon=%.7f AMSL=%.2f TAS=%.2f EAS=%.2f force_enable=%d\n", ...
             t, logical(servo_msg.is_new), sprintf("%.2f ", u(1:10)), ...
-            uav.lat_deg, uav.lon_deg, uav.AMSL, uav.TAS, uav.EAS);
+            uav.lat_deg, uav.lon_deg, uav.AMSL, uav.TAS, uav.EAS, cfg.model.force_enable);
         last_print_t = t;
     end
 
@@ -48,4 +47,5 @@ while t < max_time_s
     t = t + cfg.dt;
 end
 end
+
 

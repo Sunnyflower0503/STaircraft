@@ -5,6 +5,13 @@ cfg.sample_time = 0.01;
 cfg.dt = 0.01;
 cfg.pace = 1;
 
+cfg.model.force_enable = 0;
+cfg.model.zero_force_mode = "freeze";
+
+cfg.runtime_control.enable_file_control = true;
+cfg.runtime_control.file = fullfile(fileparts(mfilename("fullpath")), "runtime_control.txt");
+cfg.runtime_control.check_period = 0.2;
+
 cfg.serial.port = "COM4";
 cfg.serial.baudrate = 115200;
 cfg.serial.data_bits = 8;
