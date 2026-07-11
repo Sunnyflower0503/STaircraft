@@ -59,6 +59,28 @@ heading = 0 deg
 
 `state_to_uavdata_like` treats `cfg.init` as the default geodetic reference origin.
 
+## One-Click Run Script / 一键运行脚本
+
+Use this script like pressing Run in the former Simulink HITL model:
+
+```matlab
+run('D:/D_zx/26WORK/ShengTai/0710HITL_ST/STaircraft/HITL/run_hitl_stand_static.m')
+```
+
+or open `HITL/run_hitl_stand_static.m` in MATLAB and click Run.
+
+Run order:
+
+1. USB: connect Nora/PX4 to QGC.
+2. Serial: connect Nora/PX4 to MATLAB `COM4`.
+3. Make sure QGC does not occupy `COM4`.
+4. Run `run_hitl_stand_static.m` in MATLAB.
+5. Wait for the aircraft to appear in QGC.
+6. Manually arm and move throttle/control sticks as needed.
+7. Watch MATLAB for changing `SERVO_OUTPUT_RAW` values.
+8. Press Ctrl+C in MATLAB to stop. The script will try to save a log under `HITL/logs/run_hitl_stand_static_yyyymmdd_HHMMSS.mat`.
+
+The script freezes the prepared stand-static state. It does not call `Runge_Kutta4` or `tandem_zx_dynamics` inside the runtime loop.
 ## Stand Static HITL Test / 支架静止通信测试
 
 Purpose:
@@ -126,3 +148,4 @@ With `force_enable=0`, `hitl_main` freezes the prepared stand-static state and k
 - QGC/PX4 is displaying another GPS or positioning source instead of the HITL state.
 - MATLAB's Python environment does not have `pymavlink` installed.
 - `HIL_STATE_QUATERNION` may not be enough for some PX4 configurations; `HIL_GPS` may be needed later, but it is intentionally out of scope for this stage.
+
