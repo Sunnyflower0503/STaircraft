@@ -29,9 +29,16 @@ cfg.mavlink.sysid = 1;
 cfg.mavlink.compid = 1;
 cfg.mavlink.backend = "pymavlink";
 
-cfg.init.lat_deg = 0;
-cfg.init.lon_deg = 0;
-cfg.init.AMSL = 0;
+% 新校区实验室 / 跑道初始点
+% lat0_PHNL = 34.021511 deg
+% lon0_PHNL = 108.757100 deg
+% H_runway_PHNL = 500 m
+% psi_runway_PHNL = 0 deg
+cfg.init.lat_deg = 34.021511;
+cfg.init.lon_deg = 108.757100;
+cfg.init.AMSL = 500;
+cfg.init.heading_deg = 0;
+cfg.init.use_param_geodetic = false;
 
 cfg.env.rho0 = 1.225;
 cfg.env.earth_radius = 6378137.0;
@@ -46,5 +53,6 @@ cfg.elevon_deg_table = linspace(-30, 30, 1000);
 cfg.elevon.min_rad = [];
 cfg.elevon.max_rad = [];
 end
+
 
 

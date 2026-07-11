@@ -1,16 +1,17 @@
 function x0 = initial_state_from_param(param, cfg)
 %INITIAL_STATE_FROM_PARAM Build the 13-state initial condition.
+% Default HITL geodetic origin is cfg.init; p_e starts at local NED zero.
 
-p_e = [0; 0; -cfg.init.AMSL];
+p_e = [0; 0; 0];
 v_b = zeros(3, 1);
-euler = zeros(3, 1);
+euler = [0; 0; deg2rad(cfg.init.heading_deg)];
 pqr = zeros(3, 1);
 
 if isfield(param, "InitData")
     init = param.InitData;
-    if isfield(init, "Xe"), p_e = init.Xe(:); end
+    % Keep optional initial velocity/rates from the plant parameter file, but
+    % keep HITL local position and heading tied to cfg.init by default.
     if isfield(init, "Vb"), v_b = init.Vb(:); end
-    if isfield(init, "Euler"), euler = init.Euler(:); end
     if isfield(init, "pqr"), pqr = init.pqr(:); end
 end
 

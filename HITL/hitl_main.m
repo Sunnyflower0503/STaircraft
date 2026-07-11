@@ -16,6 +16,9 @@ cfg = hitl_config();
 param = init_param_zx();
 x = initial_state_from_param(param, cfg);
 u = zeros(12, 1);
+uav0 = state_to_uavdata_like(0, x, u, param, cfg);
+fprintf("HITL initial position: lat=%.6f lon=%.6f AMSL=%.0f heading=%.0f\n", ...
+    uav0.lat_deg, uav0.lon_deg, uav0.AMSL, cfg.init.heading_deg);
 ser = serial_open(cfg);
 cleanup = onCleanup(@() clear("ser")); %#ok<NASGU>
 
@@ -47,5 +50,6 @@ while t < max_time_s
     t = t + cfg.dt;
 end
 end
+
 
 

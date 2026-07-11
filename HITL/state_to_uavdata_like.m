@@ -47,16 +47,12 @@ function [lat0, lon0, amsl0] = initial_geo(param, cfg)
 lat0 = cfg.init.lat_deg;
 lon0 = cfg.init.lon_deg;
 amsl0 = cfg.init.AMSL;
-if isfield(param, "InitData")
+
+if isfield(cfg.init, "use_param_geodetic") && cfg.init.use_param_geodetic && isfield(param, "InitData")
     init = param.InitData;
     if isfield(init, "lat_deg"), lat0 = init.lat_deg; end
     if isfield(init, "lon_deg"), lon0 = init.lon_deg; end
     if isfield(init, "AMSL"), amsl0 = init.AMSL; end
-end
-if ~isfield(param, "InitData") || ~isfield(param.InitData, "AMSL")
-    if isfield(param, "amsl0")
-        amsl0 = param.amsl0;
-    end
 end
 end
 
@@ -71,4 +67,5 @@ catch
     ab = zeros(3, 1);
 end
 end
+
 

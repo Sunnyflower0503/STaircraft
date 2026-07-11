@@ -66,7 +66,7 @@ Confirm these in `hitl_config.m` before real hardware use:
 
 - `cfg.mavlink.sysid`
 - `cfg.mavlink.compid`
-- Initial `lat_deg`, `lon_deg`, and `AMSL`, unless available in `param.InitData`
+- Initial `lat_deg`, `lon_deg`, `AMSL`, and `heading_deg` in `cfg.init`
 - Whether the serial port is still `COM4` at `115200`
 - PX4/Nora is streaming `SERVO_OUTPUT_RAW` on that link
 - The elevon lookup table. Current setting is:
@@ -106,6 +106,36 @@ cd('D:/D_zx/26WORK/ShengTai/0710HITL_ST/STaircraft/HITL')
 hitl_main(10)
 ```
 
+## Initial Geodetic Position
+
+Current HITL initial position:
+
+```text
+lat = 34.021511 deg
+lon = 108.757100 deg
+AMSL = 500 m
+heading = 0 deg
+```
+
+This comes from the new campus / lab runway reference point:
+
+```matlab
+% 新校区实验室
+lat0_PHNL = 34.021511;
+lon0_PHNL = 108.757100;
+H_runway_PHNL = 500;
+psi_runway_PHNL = 0;
+```
+
+`state_to_uavdata_like` treats `cfg.init` as the default geodetic reference origin. When the local NED state is `p_e = [0; 0; 0]`, the outgoing `HIL_STATE_QUATERNION` payload is sent at this lat/lon/AMSL. This remains true when `force_enable=0` and the state is frozen, so QGC should show the aircraft near this initial location as soon as HITL communication starts.
+
+If QGC still shows the wrong position, check:
+
+- `HIL_STATE_QUATERNION` is being sent continuously.
+- `payload.lat`, `payload.lon`, and `payload.alt` are correct degE7/mm values.
+- QGC/PX4 is not displaying another GPS or positioning source instead.
+- PX4 accepts position from `HIL_STATE_QUATERNION` in the current mode.
+- The current setup may still need `HIL_GPS` or another positioning message.
 ## Runtime force control
 
 `hitl_main` can switch model forces on or off while MATLAB keeps running. Edit this file during runtime:
@@ -160,4 +190,5 @@ Switching `force_enable` from `0` to `1` can produce a transient. It is better t
 - `ab` is currently estimated from model acceleration minus gravity and transformed to body axes. TODO: confirm this matches the original Simulink specific-force convention exactly.
 - Whether `HIL_STATE_QUATERNION` alone is sufficient for the current PX4 HITL setup must be confirmed on the real vehicle configuration.
 - MATLAB real-time behavior is suitable for chain reproduction and validation, but it is not equivalent to a hard real-time C++ bridge.
+
 
