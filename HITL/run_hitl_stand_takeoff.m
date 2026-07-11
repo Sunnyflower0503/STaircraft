@@ -52,7 +52,8 @@ state = initial_stand_takeoff_state();
 last_servo_raw = nan(1, 8);
 last_servo_rx_s = NaN;
 last_print_s = 0;
-last_state_update_s = 0;
+sim_time = 0;
+n_substeps = round(cfg.sample_time / cfg.dt);
 first_servo_reported = false;
 no_servo_warning_printed = false;
 stop_after_landing = false;
@@ -77,9 +78,7 @@ fprintf("[HITL TAKEOFF] Serial opened: %s @ %d. Manual arm only; no MAV_CMD_COMP
 t_start = tic;
 while ~stop_after_landing
     loop_tic = tic;
-    elapsed_s = toc(t_start);
-    state_dt_s = max(0, elapsed_s - last_state_update_s);
-    last_state_update_s = elapsed_s;
+    wall_time_s = toc(t_start);
 
     bytes = serial_read_bytes(ser);
     stats.rx_bytes_total = stats.rx_bytes_total + numel(bytes);
@@ -89,15 +88,15 @@ while ~stop_after_landing
     catch ME
         stats.decode_error_count = stats.decode_error_count + 1;
         servo_msg = empty_servo_msg();
-        fprintf(2, "[HITL TAKEOFF] decode error at t=%.3fs: %s\n", elapsed_s, ME.message);
+        fprintf(2, "[HITL TAKEOFF] decode error at wall_time=%.3fs: %s\n", wall_time_s, ME.message);
     end
 
     if servo_msg.is_new
         stats.servo_output_raw_count = stats.servo_output_raw_count + 1;
         if ~isnan(last_servo_rx_s)
-            stats.max_rx_gap_s = max(stats.max_rx_gap_s, elapsed_s - last_servo_rx_s);
+            stats.max_rx_gap_s = max(stats.max_rx_gap_s, wall_time_s - last_servo_rx_s);
         end
-        last_servo_rx_s = elapsed_s;
+        last_servo_rx_s = wall_time_s;
         last_servo_raw = servo_to_row(servo_msg);
         stats.last_servo_raw = last_servo_raw;
         u = actuator_from_servo_output_raw(servo_msg, u, cfg);
@@ -110,37 +109,35 @@ while ~stop_after_landing
 
     main_throttle = mean(u(1:8));
 
-    if state.stand_released
-        [~, z] = Runge_Kutta4(@(tt, xx) tandem_zx_dynamics(tt, xx, u, param), ...
-            [elapsed_s elapsed_s + cfg.dt], x);
-        x = z(:, end);
-        x(7:10) = quat_normalize(x(7:10));
-    end
+    [x, sim_time, n_substeps] = advance_hitl_dynamics_substeps(x, u, param, cfg, sim_time, state.stand_released);
 
     contact_diag = hitl_ground_contact_diagnostics(x, param);
-    state = stand_takeoff_state_step(state, main_throttle, contact_diag.active_contact_count, state_dt_s, cfg);
+    state = stand_takeoff_state_step(state, main_throttle, contact_diag.active_contact_count, n_substeps * cfg.dt, cfg);
 
     if state.just_released
-        fprintf("[HITL] Stand released: throttle=%.3f t=%.3f\n", main_throttle, elapsed_s);
+        fprintf("[HITL] Stand released: throttle=%.3f t=%.3f\n", main_throttle, sim_time);
     end
     if state.just_liftoff_confirmed
-        fprintf("[HITL] Liftoff confirmed at t=%.3f\n", elapsed_s);
+        fprintf("[HITL] Liftoff confirmed at t=%.3f\n", sim_time);
     end
     if state.just_landing_confirmed
         fprintf("[HITL] Landing confirmed: active_contact_count=%d/6 at t=%.3f\n", ...
-            contact_diag.active_contact_count, elapsed_s);
+            contact_diag.active_contact_count, sim_time);
         fprintf("[HITL] Simulation stopped after landing.\n");
         stop_after_landing = true;
     end
 
-    uav = state_to_uavdata_like(elapsed_s, x, u, param, cfg);
+    uav = state_to_uavdata_like(sim_time, x, u, param, cfg);
     payload = uavdata_to_hil_state_quaternion_payload(uav, cfg);
     tx_bytes = mavlink_encode_hil_state_quaternion(payload, cfg);
     serial_write_bytes(ser, tx_bytes);
 
     stats.tx_bytes_total = stats.tx_bytes_total + numel(tx_bytes);
     stats.hil_state_quaternion_tx_count = stats.hil_state_quaternion_tx_count + 1;
-    stats.duration_s_actual = elapsed_s;
+    stats.duration_s_actual = wall_time_s;
+    stats.sim_time = sim_time;
+    stats.sim_speed_ratio = sim_time / max(wall_time_s, eps);
+    stats.n_substeps = n_substeps;
     stats.phase = state.phase;
     stats.stand_released = state.stand_released;
     stats.liftoff_confirmed = state.liftoff_confirmed;
@@ -153,7 +150,7 @@ while ~stop_after_landing
     stats.lon_deg = uav.lon_deg;
     stats.AMSL = uav.AMSL;
 
-    if ~first_servo_reported && ~no_servo_warning_printed && elapsed_s >= 5
+    if ~first_servo_reported && ~no_servo_warning_printed && wall_time_s >= 5
         fprintf(2, "No SERVO_OUTPUT_RAW received yet.\n");
         fprintf(2, "Check:\n");
         fprintf(2, "- QGC 是否占用了 COM4；\n");
@@ -163,14 +160,14 @@ while ~stop_after_landing
         no_servo_warning_printed = true;
     end
 
-    if elapsed_s - last_print_s >= 1
-        fprintf("[HITL TAKEOFF] t=%.1fs phase=%s throttle=%.3f stand_released=%d liftoff=%d contacts=%d/6 servo=[%s] u1_8=[%s] pos=[%.2f %.2f %.2f] vel=[%.2f %.2f %.2f] Euler=[%.2f %.2f %.2f]\n", ...
-            elapsed_s, string(state.phase), main_throttle, logical(state.stand_released), ...
+    if wall_time_s - last_print_s >= 1
+        fprintf("[HITL TAKEOFF] sim_time=%.3fs wall_time=%.3fs sim_speed_ratio=%.3f n_substeps=%d phase=%s throttle=%.3f stand_released=%d liftoff=%d contacts=%d/6 servo=[%s] u1_8=[%s] pos=[%.2f %.2f %.2f] vel=[%.2f %.2f %.2f] Euler=[%.2f %.2f %.2f]\n", ...
+            sim_time, wall_time_s, stats.sim_speed_ratio, n_substeps, string(state.phase), main_throttle, logical(state.stand_released), ...
             logical(state.liftoff_confirmed), contact_diag.active_contact_count, ...
             sprintf("%.0f ", last_servo_raw), sprintf("%.3f ", u(1:8)), ...
             x(1), x(2), x(3), x(4), x(5), x(6), ...
             stats.euler_deg(1), stats.euler_deg(2), stats.euler_deg(3));
-        last_print_s = elapsed_s;
+        last_print_s = wall_time_s;
     end
 
     loop_time_s = toc(loop_tic);
@@ -211,6 +208,9 @@ stats.lat_deg = uav0.lat_deg;
 stats.lon_deg = uav0.lon_deg;
 stats.AMSL = uav0.AMSL;
 stats.duration_s_actual = 0;
+stats.sim_time = 0;
+stats.sim_speed_ratio = NaN;
+stats.n_substeps = round(cfg.sample_time / cfg.dt);
 stats.log_file = "";
 end
 
