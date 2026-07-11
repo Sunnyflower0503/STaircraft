@@ -138,14 +138,19 @@ The dynamics are written in NED convention: positive earth `z` points downward.
     - `Sw` dynamic derivative terms,
     - 8 `S_slip` force-panel contributions.
 
-Current simplification:
+Slipstream notes:
 
-- The Simulink model computes local slipstream angle of attack and dynamic
-  pressure for each slipstream region.
-- This MATLAB copy currently uses the common aircraft air-relative velocity for
-  the slipstream panels.
-- Slipstream force is included, but detailed slipstream-induced moments are not
-  fully reproduced.
+- The 8 `S_slip` panels support a paper-style slipstream model using
+  propeller thrust, actuator-disk induced velocity, local slipstream dynamic
+  pressure, local `alpha_s`/`beta_s`, and the `f_s` lift correction.
+- `param.slipstream_enable = false` keeps the `S_slip` area in the free-stream
+  aerodynamic model, but disables propeller-induced slipstream velocity.
+- `param.slipstream_ff_enable = false` keeps induced velocity but forces
+  `f_s = 1` for sensitivity checks.
+- `param.slip_area_from_paper` selects the paper slipstream area formula;
+  otherwise the configured `param.S_slip` areas are used.
+- Slipstream force is included in `f_a`; slipstream-induced moment is
+  intentionally ignored in this MATLAB copy.
 
 If slipstream accuracy is not required, the remaining 6DOF, rotor, auxiliary
 propeller, gravity, and baseline aerodynamic paths are a close match to the
@@ -154,10 +159,48 @@ Simulink aircraft module.
 ### Ground Contact
 
 - `zx_ground_contact_force.m`
-  - Simple NED ground-contact model with normal force, damping, and friction.
+  - N-point unilateral spring-damper ground-contact model with regularized
+    friction.
   - Disabled by default through `param.ground.enable = false`.
-  - This is not a block-for-block reproduction of the Simulink `ground Support`
-    subsystem, so use caution for ground-roll or touchdown studies.
+  - Contact point count is obtained from
+    `size(param.ground.contact_points_b, 2)`, so the model is not hard-coded to
+    four or six points.
+  - Contact point positions are defined in body axes relative to the aircraft
+    center of gravity.
+  - Contact point velocity includes rigid-body rotation:
+    `v_contact_b = R_be * v_e + cross(omega_b, r_contact_b)`.
+  - NED convention is used throughout: earth `z` is positive downward, so
+    `penetration = contact_pos_e(3) - param.ground.z`; ground normal force
+    points along negative earth `z`.
+  - Per-point force is transformed back to body axes and contributes moment
+    `cross(r_contact_b, force_i_b)` about the center of gravity.
+  - `k`, `c`, `mu`, and `xy_damping` may be scalars or length-`N` vectors.
+  - The model returns a diagnostic `info` structure with per-point position,
+    velocity, penetration, penetration rate, normal force, friction force,
+    total contact force, moment, and active contact state.
+
+The default six body-axis contact points are generated from the eight main
+propeller positions and `param.MAC`:
+
+```matlab
+param.ground.contact_points_b = [
+     0.0710,   0.0710,   0.0710,  -0.6290,  -0.6290,  -0.6290;
+    -0.5845,   0,        0.5845,  -0.5845,   0,        0.5845;
+     0.1750,   0.1750,   0.1750,  -0.1750,  -0.1750,  -0.1750
+];
+```
+
+The six points are ordered as front-left, front-center, front-right,
+rear-left, rear-center, and rear-right. Their front/rear height difference
+gives a natural level-ground pitch angle of about `26.565051 deg`.
+
+Recommended fixed steps:
+
+- Airborne simulation with ground disabled: keep `param.ctrl_dt = 0.01 s`.
+- Ground-contact simulation: use `dt = 0.001 s` for validation and contact
+  studies.
+- `dt = 0.002 s` may be used for speed-prioritized runs, but peak normal-force
+  errors are larger.
 
 ## Typical Usage
 
@@ -198,16 +241,56 @@ dx = tandem_zx_dynamics(0, x0, u, param);
 
 ## Validation Status
 
-This directory has previously been used by tests under:
+This directory has been validated by repository-level MATLAB scripts under the
+project root:
 
 ```text
-GJ/tests/
+verify_matlab_model.m
+verify_propulsion_power_balance.m
+test_ground_contact_model.m
+test_ground_static_equilibrium.m
+test_ground_drop.m
+test_ground_timestep_convergence.m
+test_slipstream_paper_model.m
+test_slipstream_paper_251_trend.m
+test_slipstream_validation.m
+plot_slipstream_lift_alpha_sweep.m
 ```
 
-Existing validation has checked path resolution, high angle-of-attack
-aerodynamic scans, ground-contact sanity behavior, and finite dynamics outputs.
-Result artifacts may be found under:
+Current ground-contact acceptance checks include:
 
 ```text
-GJ/results/model_validation/
+1. zero force with no penetration,
+2. upward NED normal force under penetration,
+3. unilateral push-only contact,
+4. rigid-body angular velocity in contact-point velocity,
+5. near-zero roll moment for symmetric left/right contacts,
+6. independent enter/leave behavior for all six contact points,
+7. finite outputs,
+8. unchanged airborne dynamics when ground contact is disabled,
+9. static equilibrium on level ground at the natural pitch angle,
+10. low-height drop contact and damping behavior,
+11. fixed-step convergence for dt = 0.002, 0.001, and 0.0005 s.
+```
+
+Recent acceptance results:
+
+```text
+test_ground_contact_model: passed
+test_ground_static_equilibrium: passed
+test_ground_drop: passed
+test_ground_timestep_convergence: passed
+verify_matlab_model: passed
+```
+
+Representative ground-contact values:
+
+```text
+natural ground pitch: 26.565051177 deg
+static normal sum: 31.36 N
+mass*g: 31.36 N
+static normal error: about 3.5e-13 N
+max static penetration: about 0.0122574 m
+drop max penetration: about 0.0122574 m
+drop max total normal: about 279 N for dt = 0.001 s
 ```
