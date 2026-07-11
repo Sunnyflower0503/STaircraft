@@ -93,6 +93,38 @@ Run order:
 8. Press Ctrl+C in MATLAB to stop. The script will try to save a log under `HITL/logs/run_hitl_stand_static_yyyymmdd_HHMMSS.mat`.
 
 The script freezes the prepared stand-static state. It does not call `Runge_Kutta4` or `tandem_zx_dynamics` inside the runtime loop.
+
+## Stand Takeoff Runner / 支架起飞运行脚本
+
+`HITL/run_hitl_stand_takeoff.m` starts from the same cached stand-static state, then waits for PX4 servo output throttle before releasing the model stand:
+
+```matlab
+run('D:/D_zx/26WORK/ShengTai/0710HITL_ST/STaircraft/HITL/run_hitl_stand_takeoff.m')
+```
+
+Runtime phases:
+
+- `STAND_HOLD`: MATLAB keeps receiving `SERVO_OUTPUT_RAW`, updating actuator `u`, and sending `HIL_STATE_QUATERNION`; `x` stays frozen and the aircraft cannot move on the ground while `mean(u(1:8)) <= 0.4`.
+- `FLIGHT`: if `mean(u(1:8)) > 0.4` continuously for `0.1 s`, the stand is released once and never restored. MATLAB then advances the model with `Runge_Kutta4(@tandem_zx_dynamics, ...)`.
+- `LANDED`: after stand release, liftoff is confirmed only when all six permanent contact points are off the ground for `0.05 s`. After that, `5/6` or `6/6` active contacts held for `0.1 s` confirms landing, saves the log, and stops the loop.
+
+The script does not send `MAV_CMD_COMPONENT_ARM_DISARM`; PX4 arming remains manual in QGC or RC. Ground/landing decisions use the existing six permanent contact-point diagnostics from `zx_ground_contact_force(..., info.active)`, not height estimates. The removable stand is only part of the cached initial condition and disappears permanently after release.
+
+Key configuration in `hitl_config.m`:
+
+```matlab
+cfg.stand.release_throttle = 0.4;
+cfg.stand.release_hold_s = 0.1;
+cfg.landing.liftoff_confirm_s = 0.05;
+cfg.landing.min_active_contacts = 5;
+cfg.landing.confirm_s = 0.1;
+```
+
+Each second the runner prints phase, throttle, stand/liftoff flags, active contact count, `servo1`-`servo8`, `u(1:8)`, position, velocity, and Euler angles. Logs are saved under:
+
+```text
+HITL/logs/run_hitl_stand_takeoff_yyyymmdd_HHMMSS.mat
+```
 ## Stand Static HITL Test / 支架静止通信测试
 
 Purpose:

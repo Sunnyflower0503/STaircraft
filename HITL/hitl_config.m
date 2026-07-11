@@ -68,6 +68,12 @@ cfg.stand.settle_time_s = 20;
 cfg.stand.use_cached_settled_state = true;
 cfg.stand.cache_file = fullfile(fileparts(mfilename("fullpath")), ...
     "cache", "stand_static_settled_state.mat");
+cfg.stand.release_throttle = 0.4;
+cfg.stand.release_hold_s = 0.1;
+
+cfg.landing.liftoff_confirm_s = 0.05;
+cfg.landing.min_active_contacts = 5;
+cfg.landing.confirm_s = 0.1;
 
 cfg.env.rho0 = 1.225;
 cfg.env.earth_radius = 6378137.0;
