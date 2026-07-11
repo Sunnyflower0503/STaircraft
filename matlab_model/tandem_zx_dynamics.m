@@ -70,9 +70,9 @@ m_total_b = m_r + m_a;
 
 % --- 地面接触力 ---
 if isfield(param, 'ground') && isfield(param.ground, 'enable') && param.ground.enable
-    f_non_ground_e = R_eb * f_total_b;
-    f_ground_e = zx_ground_contact_force(p_e, v_e, f_non_ground_e, param);
-    f_total_b = f_total_b + R_be * f_ground_e;
+    [f_ground_b, m_ground_b] = zx_ground_contact_force(p_e, v_e, R_eb, omega_b, param);
+    f_total_b = f_total_b + f_ground_b;
+    m_total_b = m_total_b + m_ground_b;
 end
 
 % ======= 6DOF 四元数运动方程 =======

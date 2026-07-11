@@ -110,9 +110,26 @@ param.ground.k = 700;                  % 穿地修正弹簧 [N/m]
 param.ground.c = 70;                   % 法向阻尼 [N/(m/s)]
 param.ground.mu = 0.55;                % 地面摩擦系数
 param.ground.xy_damping = 35;          % 低速滑行阻尼 [N/(m/s)]
+param.ground.friction_v_eps = 0.05;    % 摩擦速度正则化 [m/s]
+param.ground.contact_points_b = zx_default_ground_contact_points(param);
 
 %% === 仿真 ===
 param.ctrl_dt = 0.01;
+end
+
+function contact_points_b = zx_default_ground_contact_points(param)
+prop = param.prop_pos;
+front_mid = 0.5 * (prop(2, :) + prop(3, :));
+rear_mid = 0.5 * (prop(6, :) + prop(7, :));
+points = [
+    prop(1, :);
+    front_mid;
+    prop(4, :);
+    prop(5, :);
+    rear_mid;
+    prop(8, :)];
+points(:, 1) = points(:, 1) - param.MAC;
+contact_points_b = points.';
 end
 
 function fp = zx_fit_flat_plate_params(param)
