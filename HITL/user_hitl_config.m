@@ -1,7 +1,7 @@
 function user = user_hitl_config()
 %USER_HITL_CONFIG User-editable HITL serial and initial-condition settings.
 
-user.serial.port = "COM4";
+user.serial.port = "COM9";
 user.serial.baudrate = 115200;
 
 user.init.lat_deg = 34.021511;

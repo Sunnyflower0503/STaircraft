@@ -91,6 +91,8 @@ while ~stop_after_landing
     wall_time_s = toc(t_start);
     state_dt_s = max(0, wall_time_s - last_wall_time_s);
     last_wall_time_s = wall_time_s;
+    cfg = update_runtime_control(cfg, wall_time_s);
+    cfg_flight.model.force_enable = cfg.model.force_enable;
 
     bytes = serial_read_bytes(ser);
     stats.rx_bytes_total = stats.rx_bytes_total + numel(bytes);
@@ -167,6 +169,7 @@ while ~stop_after_landing
     stats.liftoff_confirmed = state.liftoff_confirmed;
     stats.active_contact_count = contact_diag.active_contact_count;
     stats.main_throttle = main_throttle;
+    stats.force_enable = cfg.model.force_enable;
     stats.position_ned = x(1:3);
     stats.velocity_ned = x(4:6);
     stats.euler_deg = quat_to_euler_deg_local(x(7:10));
@@ -192,9 +195,9 @@ while ~stop_after_landing
     end
 
     if wall_time_s - last_print_s >= 1
-        fprintf("[HITL TAKEOFF] wall_t=%.3fs plant_t=%.3fs lag=%.3fs phase=%s throttle=%.3f stand_released=%d liftoff=%d contacts=%d/6 servo=[%s] u1_8=[%s] pos=[%.2f %.2f %.2f] vel=[%.2f %.2f %.2f] Euler=[%.2f %.2f %.2f]\n", ...
-            wall_time_s, plant_time_s, stats.plant_time_lag_s, string(state.phase), main_throttle, ...
-            logical(state.stand_released), logical(state.liftoff_confirmed), contact_diag.active_contact_count, ...
+        fprintf("[HITL TAKEOFF] wall_t=%.3fs plant_t=%.3fs lag=%.3fs phase=%s force_enable=%d throttle=%.3f stand_released=%d liftoff=%d contacts=%d/6 servo=[%s] u1_8=[%s] pos=[%.2f %.2f %.2f] vel=[%.2f %.2f %.2f] Euler=[%.2f %.2f %.2f]\n", ...
+            wall_time_s, plant_time_s, stats.plant_time_lag_s, string(state.phase), ...
+            cfg.model.force_enable, main_throttle, logical(state.stand_released), logical(state.liftoff_confirmed), contact_diag.active_contact_count, ...
             sprintf("%.0f ", last_servo_raw), sprintf("%.3f ", u(1:8)), ...
             x(1), x(2), x(3), x(4), x(5), x(6), ...
             stats.euler_deg(1), stats.euler_deg(2), stats.euler_deg(3));
@@ -226,6 +229,7 @@ stats.stand_released = false;
 stats.liftoff_confirmed = false;
 stats.active_contact_count = 0;
 stats.main_throttle = 0;
+stats.force_enable = cfg.model.force_enable;
 stats.rx_bytes_total = 0;
 stats.tx_bytes_total = 0;
 stats.servo_output_raw_count = 0;

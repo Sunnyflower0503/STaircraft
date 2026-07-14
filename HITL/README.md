@@ -116,6 +116,7 @@ Runtime time alignment:
 - `cfg.dt = 0.001 s` remains available for high-resolution offline stand settling and model studies.
 - Online takeoff does not integrate only `cfg.dt` per main loop. After stand release, it measures the actual wall-clock loop interval and advances plant dynamics by that interval.
 - A single runtime integration step is capped by `cfg.model.max_runtime_step_s = 0.05 s` to avoid a large RK4 step after an OS, serial, or Python stall.
+- `run_hitl_stand_takeoff.m` also polls `HITL/runtime_control.txt`: `force_enable=0` freezes model dynamics, and `force_enable=1` enables force integration after stand release.
 - Console output prints `wall_t`, `plant_t`, and `lag`. In `STAND_HOLD`, `plant_t=0` is expected. In `FLIGHT`, `lag` should usually stay near zero; sustained growth means the loop is not keeping up.
 - Run logs include a 10 Hz `history` struct with `wall_time_s`, `plant_time_s`, `position_ned`, `velocity_ned`, `main_throttle`, `active_contact_count`, and `phase`.
 
@@ -172,6 +173,40 @@ stats = test_stand_static_hitl_io(30)
 - `SERVO_OUTPUT_RAW` is received and changes if PX4 outputs change
 
 If `test_stand_static_hitl_io` receives `SERVO_OUTPUT_RAW` and QGC display is correct, the current target, “stand-static + HITL communication”, is complete.
+
+## Additional Static HITL Poses / 其他静态半物理姿态
+
+Two extra frozen-pose runners are available for quick PX4/QGC mode checks.
+They use the same serial, MAVLink, geodetic origin, and `HIL_STATE_QUATERNION`
+path as `run_hitl_stand_static.m`; neither runner changes the 13-state dynamics
+or the six permanent ground-contact geometry.
+
+### 90 deg Nose-Up Stand / 90 度机头朝上支架
+
+```matlab
+run('D:/D_zx/26WORK/ShengTai/0710HITL_ST/STaircraft/HITL/run_hitl_nose_up_90_stand_static.m')
+```
+
+- Sets `cfg.stand.angle_deg = 90`.
+- Uses the existing rear-row permanent contact points and a removable vertical
+  stand under the original front-center point.
+- Settles the state with the ground model and stand force, then freezes and
+  sends that pose for HITL display.
+- The 90 deg geometry gives `stand_height = 0.700000000 m`; with the current
+  finite ground/stand stiffness, a 5 s smoke test settled near pitch
+  `87.35 deg`.
+
+### Ground Flat Nose-Forward / 平放地面、机头朝前
+
+```matlab
+run('D:/D_zx/26WORK/ShengTai/0710HITL_ST/STaircraft/HITL/run_hitl_ground_flat_static.m')
+```
+
+- Sets Euler angle to `[roll, pitch, yaw] = [0, 0, cfg.init.heading_deg]`.
+- Places the aircraft nose-forward on the NED ground model with a small static
+  compression preload so the front-row ground contacts are active.
+- Intended for checking PX4 fixed-wing and multicopter/rotor mode behavior in
+  QGC while MATLAB keeps the model pose frozen.
 
 ## Cached Stand State
 
