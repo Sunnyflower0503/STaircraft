@@ -27,12 +27,15 @@ cfg.model.force_enable = 0;
 cfg.model.init_mode = "stand_static";
 
 param = init_param_zx();
+param = apply_hitl_model_switches(param, cfg);
 [param, x, u, meta] = prepare_stand_static_for_hitl(param, cfg);
+param = apply_hitl_model_switches(param, cfg);
 [x, u, meta] = apply_user_initial_conditions(x, u, cfg, param, meta);
 uav0 = state_to_uavdata_like(0, x, u, param, cfg);
 
 fprintf("[HITL RUN] Stand state prepared.\n");
-fprintf("  Euler deg     : [%.6f %.6f %.6f]\n", meta.euler_deg(1), meta.euler_deg(2), meta.euler_deg(3));
+fprintf("  q_eb [wxyz]   : [%.9f %.9f %.9f %.9f]\n", meta.q_eb(1), meta.q_eb(2), meta.q_eb(3), meta.q_eb(4));
+fprintf("  Euler deg dbg : [%.6f %.6f %.6f]\n", meta.euler_deg(1), meta.euler_deg(2), meta.euler_deg(3));
 fprintf("  velocity norm : %.3g m/s\n", meta.velocity_norm);
 fprintf("  omega norm    : %.3g rad/s\n", meta.angular_rate_norm);
 fprintf("  cache_used    : %d\n", logical(meta.cache_used));
@@ -122,9 +125,10 @@ while true
     end
 
     if elapsed_s - last_print_s >= 1
-        fprintf("[HITL RUN] t=%.1fs servo_msgs=%d tx_msgs=%d max_gap=%.3fs lat=%.6f lon=%.6f AMSL=%.0f Euler=[%.2f %.2f %.2f] last_servo=[%s]\n", ...
+        fprintf("[HITL RUN] t=%.1fs servo_msgs=%d tx_msgs=%d max_gap=%.3fs lat=%.6f lon=%.6f AMSL=%.0f q=[%.5f %.5f %.5f %.5f] Euler_dbg=[%.2f %.2f %.2f] last_servo=[%s]\n", ...
             elapsed_s, stats.servo_output_raw_count, stats.hil_state_quaternion_tx_count, ...
             stats.max_rx_gap_s, stats.lat_deg, stats.lon_deg, stats.AMSL, ...
+            stats.q_eb(1), stats.q_eb(2), stats.q_eb(3), stats.q_eb(4), ...
             stats.euler_deg(1), stats.euler_deg(2), stats.euler_deg(3), sprintf("%.0f ", last_servo_raw));
         last_print_s = elapsed_s;
     end
@@ -156,6 +160,7 @@ stats.max_rx_gap_s = 0;
 stats.loop_overrun_count = 0;
 stats.max_loop_time_s = 0;
 stats.last_servo_raw = nan(1, 8);
+stats.q_eb = meta.q_eb;
 stats.euler_deg = meta.euler_deg;
 stats.position_ned = x(1:3);
 stats.lat_deg = uav0.lat_deg;

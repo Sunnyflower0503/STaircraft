@@ -9,6 +9,9 @@ cfg.model.force_enable = 0;
 cfg.model.init_mode = "stand_static";
 cfg.model.zero_force_mode = "freeze";
 cfg.model.max_runtime_step_s = 0.05;
+cfg.model.slipstream_enable = true;
+cfg.model.slipstream_ff_enable = true;
+cfg.model.aero_body_enable = true;
 
 cfg.runtime_control.enable_file_control = true;
 cfg.runtime_control.file = fullfile(fileparts(mfilename("fullpath")), "runtime_control.txt");
@@ -50,6 +53,12 @@ cfg.user.init.lat_deg = cfg.init.lat_deg;
 cfg.user.init.lon_deg = cfg.init.lon_deg;
 cfg.user.init.AMSL = cfg.init.AMSL;
 cfg.user.init.heading_deg = cfg.init.heading_deg;
+cfg.user.model.slipstream_enable = cfg.model.slipstream_enable;
+cfg.user.model.slipstream_ff_enable = cfg.model.slipstream_ff_enable;
+cfg.user.model.aero_body_enable = cfg.model.aero_body_enable;
+cfg.user.hover.altitude_m = 20;
+cfg.user.hover.Euler_deg = [0; 90; cfg.init.heading_deg];
+cfg.user.hover.u0 = zeros(12, 1);
 cfg.user.ic.enable_override = false;
 cfg.user.ic.mode = "stand_cache";
 cfg.user.ic.Xe_NED_m = [0; 0; 0];
@@ -63,6 +72,10 @@ cfg.user.ic.override_attitude = false;
 cfg.user.ic.override_rates = false;
 cfg.user.ic.override_u0 = false;
 cfg.ic = cfg.user.ic;
+
+cfg.hover.altitude_m = 20;
+cfg.hover.Euler_deg = [0; 90; cfg.init.heading_deg];
+cfg.hover.u0 = zeros(12, 1);
 
 cfg.stand.angle_deg = 40;
 cfg.stand.settle_time_s = 20;
@@ -121,6 +134,12 @@ if isfield(cfg.user, "serial")
 end
 if isfield(cfg.user, "init")
     cfg.init = merge_user_struct(cfg.init, cfg.user.init);
+end
+if isfield(cfg.user, "model")
+    cfg.model = merge_user_struct(cfg.model, cfg.user.model);
+end
+if isfield(cfg.user, "hover")
+    cfg.hover = merge_user_struct(cfg.hover, cfg.user.hover);
 end
 cfg.ic = cfg.user.ic;
 end

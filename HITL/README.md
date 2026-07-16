@@ -176,10 +176,27 @@ If `test_stand_static_hitl_io` receives `SERVO_OUTPUT_RAW` and QGC display is co
 
 ## Additional Static HITL Poses / 其他静态半物理姿态
 
-Two extra frozen-pose runners are available for quick PX4/QGC mode checks.
+Additional pose runners are available for quick PX4/QGC mode checks.
 They use the same serial, MAVLink, geodetic origin, and `HIL_STATE_QUATERNION`
 path as `run_hitl_stand_static.m`; neither runner changes the 13-state dynamics
 or the six permanent ground-contact geometry.
+
+For runners based on `hitl_static_pose_loop.m`, dynamics follows
+`HITL/runtime_control.txt`:
+
+```text
+force_enable=0   % hold/freeze the prepared pose
+force_enable=1   % integrate dynamics with current SERVO_OUTPUT_RAW commands
+```
+
+Attitude interface rule:
+
+- The model state and `HIL_STATE_QUATERNION` message use `q_eb = [qw qx qy qz]`
+  directly.
+- Euler angles are printed only as `Euler_dbg` for human debugging and must not
+  be treated as the HITL attitude interface, especially near pitch `90 deg`.
+- The payload builder validates that the quaternion sent to PX4/QGC is finite
+  and normalized.
 
 ### 90 deg Nose-Up Stand / 90 度机头朝上支架
 
@@ -190,8 +207,8 @@ run('D:/D_zx/26WORK/ShengTai/0710HITL_ST/STaircraft/HITL/run_hitl_nose_up_90_sta
 - Sets `cfg.stand.angle_deg = 90`.
 - Uses the existing rear-row permanent contact points and a removable vertical
   stand under the original front-center point.
-- Settles the state with the ground model and stand force, then freezes and
-  sends that pose for HITL display.
+- Settles the state with the ground model and stand force, then either freezes
+  or integrates from that pose according to `runtime_control.txt`.
 - The 90 deg geometry gives `stand_height = 0.700000000 m`; with the current
   finite ground/stand stiffness, a 5 s smoke test settled near pitch
   `87.35 deg`.
@@ -206,7 +223,47 @@ run('D:/D_zx/26WORK/ShengTai/0710HITL_ST/STaircraft/HITL/run_hitl_ground_flat_st
 - Places the aircraft nose-forward on the NED ground model with a small static
   compression preload so the front-row ground contacts are active.
 - Intended for checking PX4 fixed-wing and multicopter/rotor mode behavior in
-  QGC while MATLAB keeps the model pose frozen.
+  QGC while MATLAB either freezes or integrates the model from the flat pose.
+
+### Airborne Nose-Up Hover / 空中机头竖直向上定点
+
+```matlab
+run('D:/D_zx/26WORK/ShengTai/0710HITL_ST/STaircraft/HITL/run_hitl_airborne_nose_up_hover_static.m')
+```
+
+- Initializes the aircraft already airborne with zero velocity and zero angular
+  rate.
+- Default NED position is `[0, 0, -20] m`, i.e. `20 m` above the local origin.
+- Default Euler angle is `[roll, pitch, yaw] = [0, 90, cfg.init.heading_deg]`.
+- Ground contact is disabled for this initial mode.
+- Use `force_enable=0` to hold a fixed hover display pose, or
+  `force_enable=1` to let the model integrate from that initial state.
+
+## User Model Switches / 用户模型开关
+
+The file `HITL/user_hitl_config.m` now contains model switches applied after
+`init_param_zx()` in all HITL runners:
+
+```matlab
+user.model.slipstream_enable = true;     % false: disable 8-main-rotor slipstream aero panels
+user.model.slipstream_ff_enable = true;  % false: keep slipstream velocity but set f_s = 1
+user.model.aero_body_enable = true;      % false: disable all body/wing aero force and moment
+```
+
+For temporary tests, set for example:
+
+```matlab
+user.model.slipstream_enable = false;
+user.model.aero_body_enable = false;
+```
+
+The airborne nose-up hover initial pose can also be edited there:
+
+```matlab
+user.hover.altitude_m = 20;
+user.hover.Euler_deg = [0; 90; user.init.heading_deg];
+user.hover.u0 = zeros(12, 1);
+```
 
 ## Cached Stand State
 

@@ -57,8 +57,13 @@ delta_all = [delta_t; delta_addL; delta_addR];
 [f_r, m_r] = tandem_rotor_fm(delta_all, v_e, R_eb, param);
 
 % --- 气动力/力矩 ---
-[f_a, m_a] = tandem_aero_fm(v_e, R_eb, omega_b, delta_aeL, delta_aeR, ...
-                             delta_t, param);
+if get_optional_field(param, 'aero_body_enable', true)
+    [f_a, m_a] = tandem_aero_fm(v_e, R_eb, omega_b, delta_aeL, delta_aeR, ...
+                                 delta_t, param);
+else
+    f_a = zeros(3, 1);
+    m_a = zeros(3, 1);
+end
 
 % --- 重力 ---
 f_g_e = [0; 0; param.m * param.g];   % NED: gravity points +z(down)
@@ -94,4 +99,12 @@ dq = 0.5 * Omega * q_eb;
 domega_b = param.J \ (m_total_b - cross(omega_b, param.J * omega_b));
 
 dx = [dp_e; dv_e; dq; domega_b];
+end
+
+function value = get_optional_field(s, name, default_value)
+if isfield(s, name)
+    value = s.(name);
+else
+    value = default_value;
+end
 end

@@ -1,14 +1,22 @@
-function [param, x_stand, u0, meta] = prepare_stand_static_for_hitl(param, cfg)
-%PREPARE_STAND_STATIC_FOR_HITL Prepare the validated 40 deg stand-static state.
-% The stand geometry and settling logic are adapted from run_takeoff_throttle_sweep.m.
+function [param, x_stand, u0, meta] = prepare_stand_angle_static_for_hitl(param, cfg, stand_angle_deg, mode_name)
+%PREPARE_STAND_ANGLE_STATIC_FOR_HITL Prepare a settled stand-supported HITL pose.
 
 hitl_dir = fileparts(mfilename("fullpath"));
 addpath(fullfile(hitl_dir, "utils"));
 addpath(fullfile(fileparts(hitl_dir), "matlab_model"));
 
-cache_file = cfg.stand.cache_file;
+if nargin < 4 || strlength(string(mode_name)) == 0
+    mode_name = sprintf("stand_%gdeg_static", stand_angle_deg);
+end
+
+cache_file = fullfile(hitl_dir, "cache", sprintf("%s_settled_state.mat", mode_name));
+if isfield(cfg, "stand") && isfield(cfg.stand, "cache_file")
+    cache_file = cfg.stand.cache_file;
+end
+
 u0 = zeros(12, 1);
-if cfg.stand.use_cached_settled_state && isfile(cache_file)
+if isfield(cfg, "stand") && isfield(cfg.stand, "use_cached_settled_state") && ...
+        cfg.stand.use_cached_settled_state && isfile(cache_file)
     s = load(cache_file, "param", "x_stand", "u0", "meta");
     param = s.param;
     x_stand = s.x_stand;
@@ -18,14 +26,20 @@ if cfg.stand.use_cached_settled_state && isfile(cache_file)
     if ~isfield(meta, "q_eb")
         meta.q_eb = quat_normalize(x_stand(7:10));
     end
-    validate_stand_state(x_stand, u0, meta);
+    if ~isfield(meta, "stand_cfg")
+        r_fc = param.ground.contact_points_b(:, 2);
+        meta.stand_cfg = struct("enabled", true, "r_b", r_fc, "top_z", meta.stand_top_z, ...
+            "k", get_ground_scalar(param.ground.k, 1), ...
+            "c", get_ground_scalar(param.ground.c, 1));
+    end
+    validate_static_state(x_stand, u0, meta);
     return;
 end
 
 param.ground.enable = true;
 dt = cfg.dt;
 settle_time = cfg.stand.settle_time_s;
-theta0 = cfg.stand.angle_deg * param.D2R;
+theta0 = stand_angle_deg * param.D2R;
 
 q0 = [cos(theta0 / 2); 0; sin(theta0 / 2); 0];
 R_eb0 = quat_to_rotm_local(q0);
@@ -49,7 +63,7 @@ x_stand(7:10) = quat_normalize(x_stand(7:10));
 euler_deg = quat_to_euler_zyx_local(x_stand(7:10)) * param.R2D;
 
 meta = struct();
-meta.mode = "stand_static";
+meta.mode = string(mode_name);
 meta.cache_used = false;
 meta.cache_file = cache_file;
 meta.position_ned = x_stand(1:3);
@@ -57,13 +71,14 @@ meta.q_eb = x_stand(7:10);
 meta.euler_deg = euler_deg;
 meta.velocity_norm = norm(x_stand(4:6));
 meta.angular_rate_norm = norm(x_stand(11:13));
-meta.stand_angle_deg = cfg.stand.angle_deg;
+meta.stand_angle_deg = stand_angle_deg;
 meta.settle_time_s = settle_time;
 meta.dt = dt;
 meta.stand_height = stand_height;
 meta.stand_top_z = stand_top_z;
+meta.stand_cfg = stand_cfg;
 
-validate_stand_state(x_stand, u0, meta);
+validate_static_state(x_stand, u0, meta);
 
 cache_dir = fileparts(cache_file);
 if ~exist(cache_dir, "dir")
@@ -88,7 +103,6 @@ contact_pos_e = p_e + R_eb * r_b;
 v_contact_b = R_be * v_e + cross(omega_b, r_b);
 v_contact_e = R_eb * v_contact_b;
 penetration = contact_pos_e(3) - stand_cfg.top_z;
-normal = 0;
 force_e = zeros(3, 1);
 if penetration > 0
     normal = max(0, stand_cfg.k * penetration + stand_cfg.c * v_contact_e(3));
@@ -98,24 +112,21 @@ f_b = R_be * force_e;
 m_b = cross(r_b, f_b);
 end
 
-function validate_stand_state(x_stand, u0, meta)
+function validate_static_state(x_stand, u0, meta)
 if ~isequal(size(x_stand), [13, 1])
-    error("prepare_stand_static_for_hitl:BadStateSize", "x_stand must be 13x1.");
+    error("prepare_stand_angle_static_for_hitl:BadStateSize", "x_stand must be 13x1.");
 end
 if ~isequal(size(u0), [12, 1])
-    error("prepare_stand_static_for_hitl:BadInputSize", "u0 must be 12x1.");
+    error("prepare_stand_angle_static_for_hitl:BadInputSize", "u0 must be 12x1.");
 end
 if any(~isfinite(x_stand)) || any(~isfinite(u0))
-    error("prepare_stand_static_for_hitl:NonFinite", "Stand state or input contains NaN/Inf.");
+    error("prepare_stand_angle_static_for_hitl:NonFinite", "Stand state or input contains NaN/Inf.");
 end
 if meta.velocity_norm > 1e-3
-    error("prepare_stand_static_for_hitl:VelocityNotSettled", "Stand linear velocity norm is %.3g.", meta.velocity_norm);
+    error("prepare_stand_angle_static_for_hitl:VelocityNotSettled", "Stand linear velocity norm is %.3g.", meta.velocity_norm);
 end
 if meta.angular_rate_norm > 1e-3
-    error("prepare_stand_static_for_hitl:RateNotSettled", "Stand angular-rate norm is %.3g.", meta.angular_rate_norm);
-end
-if meta.euler_deg(2) <= 20
-    error("prepare_stand_static_for_hitl:PitchTooSmall", "Stand pitch %.3f deg is not above 20 deg.", meta.euler_deg(2));
+    error("prepare_stand_angle_static_for_hitl:RateNotSettled", "Stand angular-rate norm is %.3g.", meta.angular_rate_norm);
 end
 end
 

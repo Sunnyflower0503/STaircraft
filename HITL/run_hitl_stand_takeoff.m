@@ -23,13 +23,19 @@ fprintf("Stop   : landing detected or Ctrl+C\n");
 fprintf("========================================\n");
 
 cfg = hitl_config();
-cfg.model.force_enable = 0;
 cfg.model.init_mode = "stand_static";
 cfg_flight = cfg;
-cfg_flight.model.force_enable = 1;
+
+fprintf("[HITL TAKEOFF] Runtime control file: %s\n", cfg.runtime_control.file);
+fprintf("[HITL TAKEOFF] Set it to force_enable=1 to enable dynamics, force_enable=0 to freeze.\n");
+cfg = update_runtime_control(cfg, 0, true);
+cfg_flight.model.force_enable = cfg.model.force_enable;
+fprintf("[HITL TAKEOFF] Initial force_enable from runtime control: %d\n", cfg.model.force_enable);
 
 param = init_param_zx();
+param = apply_hitl_model_switches(param, cfg);
 [param, x, u, meta] = prepare_stand_static_for_hitl(param, cfg);
+param = apply_hitl_model_switches(param, cfg);
 [x, u, meta] = apply_user_initial_conditions(x, u, cfg, param, meta);
 param.ground.enable = true;
 
@@ -37,7 +43,8 @@ uav0 = state_to_uavdata_like(0, x, u, param, cfg);
 contact_diag = hitl_ground_contact_diagnostics(x, param);
 
 fprintf("[HITL TAKEOFF] Stand state prepared.\n");
-fprintf("  Euler deg     : [%.6f %.6f %.6f]\n", meta.euler_deg(1), meta.euler_deg(2), meta.euler_deg(3));
+fprintf("  q_eb [wxyz]   : [%.9f %.9f %.9f %.9f]\n", meta.q_eb(1), meta.q_eb(2), meta.q_eb(3), meta.q_eb(4));
+fprintf("  Euler deg dbg : [%.6f %.6f %.6f]\n", meta.euler_deg(1), meta.euler_deg(2), meta.euler_deg(3));
 fprintf("  velocity norm : %.3g m/s\n", meta.velocity_norm);
 fprintf("  omega norm    : %.3g rad/s\n", meta.angular_rate_norm);
 fprintf("  cache_used    : %d\n", logical(meta.cache_used));
@@ -172,6 +179,7 @@ while ~stop_after_landing
     stats.force_enable = cfg.model.force_enable;
     stats.position_ned = x(1:3);
     stats.velocity_ned = x(4:6);
+    stats.q_eb = quat_normalize(x(7:10));
     stats.euler_deg = quat_to_euler_deg_local(x(7:10));
     stats.lat_deg = uav.lat_deg;
     stats.lon_deg = uav.lon_deg;
@@ -195,11 +203,12 @@ while ~stop_after_landing
     end
 
     if wall_time_s - last_print_s >= 1
-        fprintf("[HITL TAKEOFF] wall_t=%.3fs plant_t=%.3fs lag=%.3fs phase=%s force_enable=%d throttle=%.3f stand_released=%d liftoff=%d contacts=%d/6 servo=[%s] u1_8=[%s] pos=[%.2f %.2f %.2f] vel=[%.2f %.2f %.2f] Euler=[%.2f %.2f %.2f]\n", ...
+        fprintf("[HITL TAKEOFF] wall_t=%.3fs plant_t=%.3fs lag=%.3fs phase=%s force_enable=%d throttle=%.3f stand_released=%d liftoff=%d contacts=%d/6 servo=[%s] u1_8=[%s] pos=[%.2f %.2f %.2f] vel=[%.2f %.2f %.2f] q=[%.5f %.5f %.5f %.5f] Euler_dbg=[%.2f %.2f %.2f]\n", ...
             wall_time_s, plant_time_s, stats.plant_time_lag_s, string(state.phase), ...
             cfg.model.force_enable, main_throttle, logical(state.stand_released), logical(state.liftoff_confirmed), contact_diag.active_contact_count, ...
             sprintf("%.0f ", last_servo_raw), sprintf("%.3f ", u(1:8)), ...
             x(1), x(2), x(3), x(4), x(5), x(6), ...
+            stats.q_eb(1), stats.q_eb(2), stats.q_eb(3), stats.q_eb(4), ...
             stats.euler_deg(1), stats.euler_deg(2), stats.euler_deg(3));
         last_print_s = wall_time_s;
     end
@@ -240,6 +249,7 @@ stats.loop_overrun_count = 0;
 stats.max_loop_time_s = 0;
 stats.last_servo_raw = nan(1, 8);
 stats.euler_deg = meta.euler_deg;
+stats.q_eb = meta.q_eb;
 stats.position_ned = x(1:3);
 stats.velocity_ned = x(4:6);
 stats.lat_deg = uav0.lat_deg;
@@ -261,6 +271,7 @@ history.wall_time_s = zeros(1, 0);
 history.plant_time_s = zeros(1, 0);
 history.position_ned = zeros(3, 0);
 history.velocity_ned = zeros(3, 0);
+history.q_eb = zeros(4, 0);
 history.main_throttle = zeros(1, 0);
 history.active_contact_count = zeros(1, 0);
 history.phase = strings(1, 0);
@@ -271,6 +282,7 @@ history.wall_time_s(end + 1) = stats.duration_s_actual;
 history.plant_time_s(end + 1) = stats.plant_time_s;
 history.position_ned(:, end + 1) = stats.position_ned(:);
 history.velocity_ned(:, end + 1) = stats.velocity_ned(:);
+history.q_eb(:, end + 1) = stats.q_eb(:);
 history.main_throttle(end + 1) = stats.main_throttle;
 history.active_contact_count(end + 1) = stats.active_contact_count;
 history.phase(end + 1) = string(stats.phase);

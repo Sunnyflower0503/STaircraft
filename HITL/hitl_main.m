@@ -14,20 +14,23 @@ addpath(fullfile(root_dir, "matlab_model"));
 
 cfg = hitl_config();
 param = init_param_zx();
+param = apply_hitl_model_switches(param, cfg);
 if string(cfg.model.init_mode) == "stand_static"
     [param, x, u, meta] = prepare_stand_static_for_hitl(param, cfg);
 else
     x = initial_state_from_param(param, cfg);
     u = zeros(12, 1);
-    meta = struct("mode", string(cfg.model.init_mode), "euler_deg", [NaN; NaN; NaN]);
+    meta = struct("mode", string(cfg.model.init_mode), "q_eb", quat_normalize(x(7:10)), "euler_deg", [NaN; NaN; NaN]);
 end
+param = apply_hitl_model_switches(param, cfg);
 [x, u, meta] = apply_user_initial_conditions(x, u, cfg, param, meta);
 
 uav0 = state_to_uavdata_like(0, x, u, param, cfg);
 fprintf("[HITL] Initial geodetic position:\nlat=%.6f lon=%.6f AMSL=%.0f heading=%.0f\n", ...
     uav0.lat_deg, uav0.lon_deg, uav0.AMSL, cfg.init.heading_deg);
-fprintf("[HITL] Initial mode:\nforce_enable=%d init_mode=%s stand_euler=[%.2f %.2f %.2f]\n", ...
-    cfg.model.force_enable, string(cfg.model.init_mode), meta.euler_deg(1), meta.euler_deg(2), meta.euler_deg(3));
+fprintf("[HITL] Initial mode:\nforce_enable=%d init_mode=%s q_eb=[%.6f %.6f %.6f %.6f] Euler_dbg=[%.2f %.2f %.2f]\n", ...
+    cfg.model.force_enable, string(cfg.model.init_mode), meta.q_eb(1), meta.q_eb(2), meta.q_eb(3), meta.q_eb(4), ...
+    meta.euler_deg(1), meta.euler_deg(2), meta.euler_deg(3));
 
 ser = serial_open(cfg);
 cleanup = onCleanup(@() clear("ser")); %#ok<NASGU>

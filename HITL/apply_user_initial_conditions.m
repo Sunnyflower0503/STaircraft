@@ -54,6 +54,7 @@ switch mode
 end
 
 meta.position_ned = x(1:3);
+meta.q_eb = quat_normalize(x(7:10));
 meta.euler_deg = quat_to_euler_deg(x(7:10));
 meta.velocity_norm = norm(x(4:6));
 meta.angular_rate_norm = norm(x(11:13));

@@ -2,6 +2,10 @@ function payload = uavdata_to_hil_state_quaternion_payload(uav, cfg)
 %UAVDATA_TO_HIL_STATE_QUATERNION_PAYLOAD Convert UAV-like struct to MAVLink payload.
 
 q = quat_normalize(uav.q_eb(:));
+if numel(q) ~= 4 || any(~isfinite(q)) || abs(norm(q) - 1) > 1e-6
+    error("uavdata_to_hil_state_quaternion_payload:BadQuaternion", ...
+        "uav.q_eb must be a finite normalized [qw qx qy qz] quaternion.");
+end
 
 payload = struct();
 payload.time_usec = uint64(uav.time_s * 1e6);
