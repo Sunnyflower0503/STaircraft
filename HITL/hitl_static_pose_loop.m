@@ -1,5 +1,10 @@
-function stats = hitl_static_pose_loop(title_text, mode_name, x, u, param, cfg, meta)
+function stats = hitl_static_pose_loop(title_text, mode_name, x, u, param, cfg, meta, duration_s)
 %HITL_STATIC_POSE_LOOP Send a HITL pose and optionally integrate dynamics.
+
+if nargin < 8 || isempty(duration_s)
+    duration_s = inf;
+end
+validateattributes(duration_s, {'numeric'}, {'scalar', 'positive'});
 
 fprintf("========================================\n");
 fprintf("GJ Aircraft HITL - %s\n", title_text);
@@ -10,7 +15,11 @@ fprintf("Mode   : %s\n", mode_name);
 fprintf("Force  : follows runtime_control.txt force_enable\n");
 fprintf("RX     : SERVO_OUTPUT_RAW\n");
 fprintf("TX     : HIL_STATE_QUATERNION\n");
-fprintf("Stop   : Ctrl+C in MATLAB\n");
+if isfinite(duration_s)
+    fprintf("Stop   : automatic after %.1f s\n", duration_s);
+else
+    fprintf("Stop   : Ctrl+C in MATLAB\n");
+end
 fprintf("========================================\n");
 
 uav0 = state_to_uavdata_like(0, x, u, param, cfg);
@@ -45,6 +54,17 @@ if isfield(meta, "user_initial_conditions")
 end
 
 stats = init_static_stats(cfg, mode_name, meta, x, uav0);
+stats.cfg_snapshot = cfg;
+stats.param_snapshot = param;
+stats.meta = meta;
+stats.log_file = create_log_file(fileparts(mfilename("fullpath")), string(mode_name));
+fprintf("[HITL STATIC] Log autosave file: %s\n", stats.log_file);
+save_stats_snapshot(stats, "[HITL STATIC] Created initial log");
+history = init_history();
+history_sample_period_s = 0.1;
+last_history_sample_s = -Inf;
+autosave_period_s = 2.0;
+last_autosave_s = -Inf;
 last_servo_raw = nan(1, 8);
 last_servo_rx_s = NaN;
 last_print_s = 0;
@@ -74,6 +94,10 @@ t_start = tic;
 while true
     loop_tic = tic;
     elapsed_s = toc(t_start);
+    if elapsed_s >= duration_s
+        fprintf("[HITL STATIC] Reached requested duration %.1f s.\n", duration_s);
+        break;
+    end
     state_dt_s = max(0, elapsed_s - last_wall_time_s);
     last_wall_time_s = elapsed_s;
     cfg = update_runtime_control(cfg, elapsed_s);
@@ -128,6 +152,20 @@ while true
     stats.velocity_ned = x(4:6);
     stats.q_eb = quat_normalize(x(7:10));
     stats.euler_deg = quat_to_euler_deg_local(x(7:10));
+    stats.x_state = x;
+    stats.u = u;
+    stats.last_servo_raw = last_servo_raw;
+
+    if elapsed_s - last_history_sample_s >= history_sample_period_s
+        history = append_history(history, stats, plant_time_s);
+        stats.history = history;
+        last_history_sample_s = elapsed_s;
+    end
+
+    if elapsed_s - last_autosave_s >= autosave_period_s
+        save_stats_snapshot(stats, "[HITL STATIC] Autosaved log");
+        last_autosave_s = elapsed_s;
+    end
 
     if ~first_servo_reported && ~no_servo_warning_printed && elapsed_s >= 5
         fprintf(2, "No SERVO_OUTPUT_RAW received yet.\n");
@@ -154,6 +192,8 @@ while true
         pause(cfg.sample_time - loop_time_s);
     end
 end
+stats.history = history;
+save_stats_snapshot(stats, "[HITL STATIC] Saved completed log");
 end
 
 function x_next = integrate_static_pose_step(t, x, u, param, meta, step_s)
@@ -223,11 +263,41 @@ stats.last_servo_raw = nan(1, 8);
 stats.q_eb = meta.q_eb;
 stats.euler_deg = meta.euler_deg;
 stats.position_ned = x(1:3);
+stats.velocity_ned = x(4:6);
+stats.x_state = x;
+stats.u = zeros(12, 1);
+stats.history_sample_period_s = 0.1;
+stats.history = init_history();
 stats.lat_deg = uav0.lat_deg;
 stats.lon_deg = uav0.lon_deg;
 stats.AMSL = uav0.AMSL;
 stats.duration_s_actual = 0;
 stats.log_file = "";
+end
+
+function history = init_history()
+history = struct();
+history.wall_time_s = zeros(1, 0);
+history.plant_time_s = zeros(1, 0);
+history.x_state = zeros(13, 0);
+history.u = zeros(12, 0);
+history.servo_raw = zeros(8, 0);
+history.force_enable = zeros(1, 0);
+history.position_ned = zeros(3, 0);
+history.velocity_ned = zeros(3, 0);
+history.q_eb = zeros(4, 0);
+end
+
+function history = append_history(history, stats, plant_time_s)
+history.wall_time_s(end + 1) = stats.duration_s_actual;
+history.plant_time_s(end + 1) = plant_time_s;
+history.x_state(:, end + 1) = stats.x_state(:);
+history.u(:, end + 1) = stats.u(:);
+history.servo_raw(:, end + 1) = stats.last_servo_raw(:);
+history.force_enable(end + 1) = stats.force_enable;
+history.position_ned(:, end + 1) = stats.position_ned(:);
+history.velocity_ned(:, end + 1) = stats.velocity_ned(:);
+history.q_eb(:, end + 1) = stats.q_eb(:);
 end
 
 function msg = empty_servo_msg()
@@ -250,15 +320,30 @@ try
 catch
 end
 try
-    logs_dir = fullfile(hitl_dir, "logs");
-    if ~exist(logs_dir, "dir")
-        mkdir(logs_dir);
+    if strlength(string(stats.log_file)) == 0
+        stats.log_file = create_log_file(hitl_dir, string(stats.mode));
     end
-    timestamp = string(datetime("now", "Format", "yyyyMMdd_HHmmss"));
-    stats.log_file = fullfile(logs_dir, string(stats.mode) + "_" + timestamp + ".mat");
     save(stats.log_file, "stats");
     fprintf("\n[HITL STATIC] Saved run log: %s\n", stats.log_file);
 catch ME
     fprintf(2, "\n[HITL STATIC] Failed to save run log: %s\n", ME.message);
+end
+end
+
+function log_file = create_log_file(hitl_dir, mode_name)
+logs_dir = fullfile(hitl_dir, "logs");
+if ~exist(logs_dir, "dir")
+    mkdir(logs_dir);
+end
+timestamp = string(datetime("now", "Format", "yyyyMMdd_HHmmss"));
+log_file = fullfile(logs_dir, mode_name + "_" + timestamp + ".mat");
+end
+
+function save_stats_snapshot(stats, label)
+try
+    save(stats.log_file, "stats");
+    fprintf("%s: %s\n", label, stats.log_file);
+catch ME
+    fprintf(2, "%s failed: %s\n", label, ME.message);
 end
 end

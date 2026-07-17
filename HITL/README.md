@@ -265,6 +265,50 @@ user.hover.Euler_deg = [0; 90; user.init.heading_deg];
 user.hover.u0 = zeros(12, 1);
 ```
 
+## HITL Log Force Analysis / HITL 日志力分解后处理
+
+After running `run_hitl_airborne_nose_up_hover_static.m`,
+`run_hitl_nose_up_90_stand_static.m`, `run_hitl_ground_flat_static.m`, or
+`run_hitl_stand_takeoff.m`, the runner prints a `Log autosave file` path and
+updates that MAT log about every `2 s` under `HITL/logs/`. Stopping MATLAB with
+Ctrl+C still performs one final save, but the log should already exist while the
+script is running.
+
+Analyze the latest log:
+
+```matlab
+analyze_hitl_log_forces
+```
+
+Analyze a specified log:
+
+```matlab
+analyze_hitl_log_forces('D:/D_zx/26WORK/ShengTai/0710HITL_ST/STaircraft/HITL/logs/run_hitl_stand_takeoff_yyyymmdd_HHMMSS.mat')
+```
+
+The analyzer creates:
+
+```text
+result/hitl_log_analysis_<log_name>_<timestamp>/
+    figures/
+        pwm_and_actuators.png
+        position_velocity_acceleration.png
+        attitude_quaternion_eulerdbg_rates.png
+        forces_body.png
+        forces_earth.png
+        moments_body.png
+        force_norms.png
+    data/
+    summary_timeseries.csv
+    analysis_data.mat
+```
+
+The force decomposition is recomputed from the saved `x_state`, actuator input
+`u`, PWM values, and the saved `param_snapshot`. It includes rotor force,
+aerodynamic force, gravity, ground contact, removable stand force when present,
+and total force/moment. Attitude plots use quaternion `q_eb` as the primary
+attitude; `Euler_dbg` is included only for visual debugging.
+
 ## Cached Stand State
 
 The stand-static preparation uses the validated 40 deg stand logic from `run_takeoff_throttle_sweep.m` and saves:

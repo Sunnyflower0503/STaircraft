@@ -18,6 +18,12 @@ if cfg.stand.use_cached_settled_state && isfile(cache_file)
     if ~isfield(meta, "q_eb")
         meta.q_eb = quat_normalize(x_stand(7:10));
     end
+    if ~isfield(meta, "stand_cfg")
+        r_fc = param.ground.contact_points_b(:, 2);
+        meta.stand_cfg = struct("enabled", true, "r_b", r_fc, "top_z", meta.stand_top_z, ...
+            "k", get_ground_scalar(param.ground.k, 1), ...
+            "c", get_ground_scalar(param.ground.c, 1));
+    end
     validate_stand_state(x_stand, u0, meta);
     return;
 end
@@ -62,6 +68,7 @@ meta.settle_time_s = settle_time;
 meta.dt = dt;
 meta.stand_height = stand_height;
 meta.stand_top_z = stand_top_z;
+meta.stand_cfg = stand_cfg;
 
 validate_stand_state(x_stand, u0, meta);
 

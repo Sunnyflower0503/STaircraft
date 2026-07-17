@@ -1,19 +1,16 @@
 function [T_add, M_add] =  tandem_addprop_fm(dt_left, dt_right, param)
 %TANDEM_ADDPROP_FM  翼尖辅助桨推力/力矩 (对应 Addprop Left/Right)
 %
-% C 代码 (Tandem_zx_trans6_addprop):
-%   n = polyval([-3424 12810 -4], dt) / 60  [rev/s]
-%   T_add = polyval([5.87e-8 -1.61e-5 1.4e-3 0.1137], n) * rho * n^2 * D^4
-%   D_add = 0.127 m
+% 当前模型来自 15.8 V 静力测试数据，先由油门查表/拟合电功率 P_e(dt)，
+% 再由电功率查表/拟合静推力 T(P_e)。T_left/T_right 为正的推力幅值。
 %
-% 左桨力矩 (chart_135):
-%   Mx_left =  T_add * prop_y
-%   My_left =  T_add * prop_x
-%   Mz_left =  0
-% 右桨力矩 (chart_151):
-%   Mx_right = -T_add * prop_y
-%   My_right =  T_add * prop_x
-%   Mz_right =  0
+% 机体系采用 +X=前, +Y=右, +Z=下；翼尖桨气动力沿 -Zb。
+% T_add 输出保持历史接口约定为负值，供 tandem_rotor_fm 累加到 Fz。
+%
+% param.addprop_moment_mode:
+%   "fixed_wing" : 差动翼尖桨产生滚转力矩 Mx
+%   "rotor_yaw"  : 差动翼尖桨等效为旋翼模式偏航力矩 Mz
+%   "geometry"   : 采用 r × F 几何力矩，兼容旧模型
 %
 % 输入:
 %   dt_left  : 左翼尖桨油门 [0-1]
@@ -21,55 +18,69 @@ function [T_add, M_add] =  tandem_addprop_fm(dt_left, dt_right, param)
 %   param    : 参数结构体
 %
 % 输出:
-%   T_add : [T_left; T_right] 推力 [N]
+%   T_add : [T_left; T_right] 推力接口量 [N]，负号表示沿 -Zb
 %   M_add : 合力矩 [Mx; My; Mz] [Nm]
 
-% --- 左翼尖桨推力 ---
-n_left = polyval([-3424 12810 -4], dt_left) / 60;  % rev/s
-if n_left > 0
-    CT_left = polyval([5.87e-8 -1.61e-5 0.0014 0.1137], n_left);
-    T_left = CT_left * param.rho * n_left^2 * param.addprop_D^4;
-else
-    T_left = 0;
-end    
+[T_left, ~] = addprop_static_thrust(dt_left, param);
+[T_right, ~] = addprop_static_thrust(dt_right, param);
 
-% --- 右翼尖桨推力 ---
-n_right = polyval([-3424 12810 -4], dt_right) / 60;
-if n_right > 0
-    CT_right = polyval([5.87e-8 -1.61e-5 0.0014 0.1137], n_right);
-    T_right = CT_right * param.rho * n_right^2 * param.addprop_D^4;
-else
-    T_right = 0;
+mode = "fixed_wing";
+if isfield(param, 'addprop_moment_mode')
+    mode = string(param.addprop_moment_mode);
 end
 
-% --- 力矩累计 ---
-% 机体坐标系: +X=前, +Y=右, +Z=下
-% 推力方向均为 -z (向上, 安装角=0)
-%
-% 左桨 r = [addprop_x, -addprop_y, 0]  (-Y)
-%   M_left  = r × [0,0,-T_left]  = [+T_left *addprop_y,  +T_left *addprop_x,  0]
-% 右桨 r = [addprop_x, +addprop_y, 0]  (+Y)
-%   M_right = r × [0,0,-T_right] = [-T_right*addprop_y,  +T_right*addprop_x,  0]
-
-% 左桨力矩
-Mx_left  =  T_left * param.addprop_y;
-My_left  =  T_left * param.addprop_x;
-Mz_left  =  0;
-
-% 右桨力矩
-Mx_right = -T_right * param.addprop_y;
-My_right =  T_right * param.addprop_x;
-Mz_right =  0;
-
-% Optional rotor-mode yaw authority.  The original Simulink-matched addprop
-% geometry has zero yaw moment.  When addprop_yaw_coeff is provided by the
-% controller parameter set, differential wingtip-prop thrust is interpreted
-% as an equivalent propeller reaction yaw moment for rotor-mode control tests.
-if isfield(param, 'addprop_yaw_coeff') && abs(param.addprop_yaw_coeff) > 0
-    Mz_left  =  param.addprop_yaw_coeff * T_left;
-    Mz_right = -param.addprop_yaw_coeff * T_right;
+switch lower(mode)
+    case "fixed_wing"
+        M_add = [param.addprop_y * (T_left - T_right); 0; 0];
+    case {"rotor_yaw", "rotor"}
+        yaw_arm = get_optional_scalar(param, 'addprop_rotor_yaw_arm', param.addprop_y);
+        M_add = [0; 0; yaw_arm * (T_left - T_right)];
+    case "geometry"
+        M_left = cross([param.addprop_x; -param.addprop_y; 0], [0; 0; -T_left]);
+        M_right = cross([param.addprop_x; param.addprop_y; 0], [0; 0; -T_right]);
+        M_add = M_left + M_right;
+    otherwise
+        error('tandem_addprop_fm:InvalidMomentMode', ...
+            'Unknown addprop_moment_mode: %s', mode);
 end
 
 T_add = [-T_left; -T_right];
-M_add = [Mx_left + Mx_right; My_left + My_right; Mz_left + Mz_right];
+end
+
+function [T, P_e] = addprop_static_thrust(dt, param)
+dt = min(max(dt, 0), 1);
+
+if isfield(param, 'addprop_throttle_bp') && isfield(param, 'addprop_power_table') ...
+        && isfield(param, 'addprop_thrust_power_bp') && isfield(param, 'addprop_thrust_table')
+    P_e = interp1(param.addprop_throttle_bp, param.addprop_power_table, dt, 'linear', 'extrap');
+    P_e = min(max(P_e, 0), max(param.addprop_power_table));
+    T = interp1(param.addprop_thrust_power_bp, param.addprop_thrust_table, P_e, 'linear', 'extrap');
+    T = max(T, 0);
+    return;
+end
+
+if isfield(param, 'addprop_power_coef') && isfield(param, 'addprop_thrust_power_coef')
+    P_e = max(polyval(param.addprop_power_coef, dt), 0);
+    T = max(polyval(param.addprop_thrust_power_coef, P_e), 0);
+    return;
+end
+
+n = polyval([-3424 12810 -4], dt) / 60;
+if n > 0
+    CT = polyval([5.87e-8 -1.61e-5 0.0014 0.1137], n);
+    T = max(CT * param.rho * n^2 * param.addprop_D^4, 0);
+else
+    T = 0;
+end
+P_e = NaN;
+end
+
+function value = get_optional_scalar(param, field_name, default_value)
+value = default_value;
+if isfield(param, field_name)
+    candidate = param.(field_name);
+    if isscalar(candidate) && isfinite(candidate)
+        value = candidate;
+    end
+end
 end

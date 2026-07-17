@@ -25,6 +25,8 @@ class MavlinkBridge:
         self.encoder.force_mavlink2 = True
         self.decoder = mavlink2.MAVLink(None)
         self.decoder.robust_parsing = True
+        self.diagnostic_decoder = mavlink2.MAVLink(None)
+        self.diagnostic_decoder.robust_parsing = True
 
     def decode_servo_output_raw(self, byte_values):
         latest = None
@@ -46,6 +48,32 @@ class MavlinkBridge:
             }
         return latest
 
+    def decode_diagnostics(self, byte_values):
+        result = {
+            "command_ack_new": False,
+            "command": 0,
+            "ack_result": 0,
+            "statustext_new": False,
+            "severity": 0,
+            "text": "",
+        }
+        for value in byte_values:
+            msg = self.diagnostic_decoder.parse_char(bytes([int(value) & 0xFF]))
+            if msg is None:
+                continue
+            if msg.get_type() == "COMMAND_ACK":
+                result["command_ack_new"] = True
+                result["command"] = int(msg.command)
+                result["ack_result"] = int(msg.result)
+            elif msg.get_type() == "STATUSTEXT":
+                result["statustext_new"] = True
+                result["severity"] = int(msg.severity)
+                text = msg.text
+                if isinstance(text, bytes):
+                    text = text.decode("utf-8", errors="replace")
+                result["text"] = str(text).rstrip("\x00")
+        return result
+
     def encode_hil_state_quaternion(self, payload):
         q = list(payload["attitude_quaternion"])
         msg = mavlink2.MAVLink_hil_state_quaternion_message(
@@ -65,6 +93,26 @@ class MavlinkBridge:
             int(payload["xacc"]),
             int(payload["yacc"]),
             int(payload["zacc"]),
+        )
+        self.output.clear()
+        self.encoder.send(msg, force_mavlink1=False)
+        return self.output.bytes()
+
+    def encode_manual_control(self, target, x, y, z, r, buttons=0):
+        msg = self.encoder.manual_control_encode(
+            int(target), int(x), int(y), int(z), int(r), int(buttons)
+        )
+        self.output.clear()
+        self.encoder.send(msg, force_mavlink1=False)
+        return self.output.bytes()
+
+    def encode_command_long(self, target_system, target_component, command,
+                            param1=0.0, param2=0.0, param3=0.0, param4=0.0,
+                            param5=0.0, param6=0.0, param7=0.0):
+        msg = self.encoder.command_long_encode(
+            int(target_system), int(target_component), int(command), 0,
+            float(param1), float(param2), float(param3), float(param4),
+            float(param5), float(param6), float(param7),
         )
         self.output.clear()
         self.encoder.send(msg, force_mavlink1=False)

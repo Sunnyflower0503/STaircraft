@@ -117,6 +117,8 @@ The dynamics are written in NED convention: positive earth `z` points downward.
   - Computes the total body-axis force and moment from 8 main rotors plus 2
     wingtip auxiliary propellers.
   - Corresponds mainly to `Aerocraft/F&M/Thrust&M in body axis old`.
+  - Main-rotor spin signs follow the physical 2-by-4 layout
+    `[1 1 -1 -1; -1 -1 1 1]` in `param.prop_pos` row order.
 
 - `tandem_rotor_thrust.m`
   - Main rotor thrust, propeller torque, rotor speed, and thrust coefficient
@@ -127,6 +129,18 @@ The dynamics are written in NED convention: positive earth `z` points downward.
 - `tandem_addprop_fm.m`
   - Wingtip auxiliary propeller thrust and moment model.
   - Corresponds to `Addprop Left` and `Addprop Right`.
+  - Current static model is fitted from the `15.8.xlsx` bench test using
+    electrical power as the intermediate variable. The preferred path is a
+    measured-data table lookup:
+    `dt -> param.addprop_power_table -> param.addprop_thrust_table`; polynomial
+    coefficients remain in `init_param_zx.m` only as a fallback.
+  - The force direction is fixed along body `-Zb`; the returned `T_add` values
+    remain negative to match the existing `tandem_rotor_fm` force summation.
+  - `param.addprop_moment_mode = "fixed_wing"` maps differential wingtip thrust
+    to roll moment, while `"rotor_yaw"` maps it to an equivalent yaw moment for
+    rotor-mode checks.
+  - Validate with `../test_addprop_158_power_model.m`; results are written to
+    `../result/addprop_158_power_validation_<timestamp>/`.
 
 ### Aerodynamic Model
 
@@ -232,9 +246,10 @@ dx = tandem_zx_dynamics(0, x0, u, param);
 - The actuator vector order in this MATLAB copy is different from the raw
   Simulink `ActData` bus order. Keep the mapping explicit when comparing
   signals.
-- Check the sign convention of the inertia cross term `Ixz` before relying on
-  roll/yaw coupling. The generated Simulink C data should be treated as the
-  reference.
+- The original General definition uses `Ixz=-0.167493906` together with
+  `Inertia(1,3)=Inertia(3,1)=-Ixz`; therefore the X-Z matrix entries are
+  `+0.167493906`. Keep this two-stage sign convention explicit when comparing
+  generated code or other model copies.
 - Ground support and detailed slipstream effects are the main known differences.
 - The model is most reliable for airborne fixed-wing or transition studies where
   detailed slipstream and ground-contact fidelity are not the dominant effects.

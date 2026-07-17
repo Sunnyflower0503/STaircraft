@@ -9,7 +9,9 @@ param.D2R = pi/180; param.R2D = 180/pi;
 
 %% === 质量和惯性 ===
 param.m = 3.2;                         % 总质量 [kg]
-Ixx=0.3236731; Iyy=0.45521417; Izz=0.616930086; Ixz=0.167493906;
+% Original General definition uses Ixz=-0.167493906 and constructs the
+% inertia matrix with -Ixz, so the matrix X-Z terms are positive.
+Ixx=0.3236731; Iyy=0.45521417; Izz=0.616930086; Ixz=-0.167493906;
 param.J = [Ixx 0 -Ixz; 0 Iyy 0; -Ixz 0 Izz];  % 惯性矩阵
 param.invJ = inv(param.J);
 
@@ -41,12 +43,27 @@ param.prop_pos = [...
    -0.329  0.175  -0.175;
    -0.329  0.5845 -0.175];
 param.prop_angle = zeros(8,1);         % 安装角=0
-param.prop_spin = [-1 -1 -1 -1 1 1 1 1]; % front=clockwise, behind=anticlockwise
+% Physical 2x4 layout by prop_pos rows 1:4 / 5:8:
+%   [ 1  1 -1 -1
+%    -1 -1  1  1 ]
+% This makes the PX4 MAIN1/2 versus MAIN3/4 differential produce a
+% nonzero thrust-axis reaction torque.
+param.prop_spin = [1 1 -1 -1 -1 -1 1 1];
 
 %% === 翼尖辅助桨 (Addprop Left / Addprop Right) ===
 param.addprop_x = 0.3;                 % 辅助桨 x 位置 [m]
 param.addprop_y = 0.65;                % 辅助桨 y 位置 [m]
 param.addprop_D = 0.127;               % 辅助桨直径 [m] (from C code: D_add=0.127)
+param.addprop_model_source = "15.8 static power table";
+param.addprop_throttle_bp = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
+param.addprop_power_table = [0, 2.1, 4.7, 8.6, 14.5, 23.7, 34.8, 47.9, 64.2, 86.8, 114.2]; % P_e [W]
+param.addprop_thrust_power_bp = param.addprop_power_table;
+param.addprop_thrust_table = [0, 0.0130428445, 0.036284605, 0.1928968055, 0.414821295, ...
+    0.7379504125, 1.096579603, 1.479333152, 1.903961098, 2.413122366, 2.997010306]; % T [N]
+param.addprop_power_coef = [146.515151515, -41.596969697, 6.62];        % P_e(dt) [W]
+param.addprop_thrust_power_coef = [-8.56911353191e-05, 0.0367453611454, -0.0976758547242]; % T(P_e) [N]
+param.addprop_moment_mode = "fixed_wing"; % fixed_wing: roll moment; rotor_yaw: yaw moment
+param.addprop_rotor_yaw_arm = param.addprop_y; % rotor_yaw 模式等效偏航力臂 [m]
 
 %% === 气动系数 (from C code data.c struct_oB3eqNsKceXibtnfQbk3QB) ===
 a = struct();
