@@ -25,6 +25,13 @@ fprintf("========================================\n");
 cfg = hitl_config();
 cfg.model.init_mode = "stand_static";
 cfg_flight = cfg;
+max_wall_time_s = str2double(getenv("HITL_MAX_WALL_TIME_S"));
+if ~isfinite(max_wall_time_s) || max_wall_time_s <= 0
+    max_wall_time_s = Inf;
+end
+if isfinite(max_wall_time_s)
+    fprintf("[HITL TAKEOFF] Automatic stop after %.1f s.\n", max_wall_time_s);
+end
 
 fprintf("[HITL TAKEOFF] Runtime control file: %s\n", cfg.runtime_control.file);
 fprintf("[HITL TAKEOFF] Set it to force_enable=1 to enable dynamics, force_enable=0 to freeze.\n");
@@ -37,6 +44,9 @@ param = apply_hitl_model_switches(param, cfg);
 [param, x, u, meta] = prepare_stand_static_for_hitl(param, cfg);
 param = apply_hitl_model_switches(param, cfg);
 [x, u, meta] = apply_user_initial_conditions(x, u, cfg, param, meta);
+u_commanded = u;
+actuator_delay_state = [];
+[u, actuator_delay_state] = apply_actuator_transport_delay(0, u_commanded, actuator_delay_state, cfg);
 param.ground.enable = true;
 
 uav0 = state_to_uavdata_like(0, x, u, param, cfg);
@@ -62,6 +72,8 @@ stats.param_snapshot = param;
 stats.meta = meta;
 stats.log_file = create_log_file(hitl_dir);
 fprintf("[HITL TAKEOFF] Log autosave file: %s\n", stats.log_file);
+fprintf("[HITL TAKEOFF] Actuator delays: motors=%.3f s, elevons=%.3f s.\n", ...
+    cfg.actuator_delay.motor_s, cfg.actuator_delay.elevon_s);
 save_stats_snapshot(stats, "[HITL TAKEOFF] Created initial log");
 state = initial_stand_takeoff_state();
 history = init_history();
@@ -104,6 +116,10 @@ t_start = tic;
 while ~stop_after_landing
     loop_tic = tic;
     wall_time_s = toc(t_start);
+    if wall_time_s >= max_wall_time_s
+        fprintf("[HITL TAKEOFF] Maximum wall time reached; stopping with the last state frozen.\n");
+        break;
+    end
     state_dt_s = max(0, wall_time_s - last_wall_time_s);
     last_wall_time_s = wall_time_s;
     cfg = update_runtime_control(cfg, wall_time_s);
@@ -128,13 +144,16 @@ while ~stop_after_landing
         last_servo_rx_s = wall_time_s;
         last_servo_raw = servo_to_row(servo_msg);
         stats.last_servo_raw = last_servo_raw;
-        u = actuator_from_servo_output_raw(servo_msg, u, cfg);
+        u_commanded = actuator_from_servo_output_raw(servo_msg, u_commanded, cfg);
 
         if ~first_servo_reported
             fprintf("HITL serial link is alive.\n");
             first_servo_reported = true;
         end
     end
+
+    [u, actuator_delay_state] = apply_actuator_transport_delay( ...
+        wall_time_s, u_commanded, actuator_delay_state, cfg);
 
     main_throttle = mean(u(1:8));
 
@@ -191,6 +210,7 @@ while ~stop_after_landing
     stats.euler_deg = quat_to_euler_deg_local(x(7:10));
     stats.x_state = x;
     stats.u = u;
+    stats.u_commanded = u_commanded;
     stats.lat_deg = uav.lat_deg;
     stats.lon_deg = uav.lon_deg;
     stats.AMSL = uav.AMSL;
@@ -270,6 +290,7 @@ stats.position_ned = x(1:3);
 stats.velocity_ned = x(4:6);
 stats.x_state = x;
 stats.u = zeros(12, 1);
+stats.u_commanded = zeros(12, 1);
 stats.lat_deg = uav0.lat_deg;
 stats.lon_deg = uav0.lon_deg;
 stats.AMSL = uav0.AMSL;
@@ -292,6 +313,7 @@ history.velocity_ned = zeros(3, 0);
 history.q_eb = zeros(4, 0);
 history.x_state = zeros(13, 0);
 history.u = zeros(12, 0);
+history.u_commanded = zeros(12, 0);
 history.servo_raw = zeros(8, 0);
 history.force_enable = zeros(1, 0);
 history.main_throttle = zeros(1, 0);
@@ -307,6 +329,7 @@ history.velocity_ned(:, end + 1) = stats.velocity_ned(:);
 history.q_eb(:, end + 1) = stats.q_eb(:);
 history.x_state(:, end + 1) = stats.x_state(:);
 history.u(:, end + 1) = stats.u(:);
+history.u_commanded(:, end + 1) = stats.u_commanded(:);
 history.servo_raw(:, end + 1) = stats.last_servo_raw(:);
 history.force_enable(end + 1) = stats.force_enable;
 history.main_throttle(end + 1) = stats.main_throttle;

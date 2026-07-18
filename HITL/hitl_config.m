@@ -13,6 +13,10 @@ cfg.model.slipstream_enable = true;
 cfg.model.slipstream_ff_enable = true;
 cfg.model.aero_body_enable = true;
 
+% Pure transport delays used by the fixed-wing stand-launch HITL runner.
+cfg.actuator_delay.motor_s = 0.3;
+cfg.actuator_delay.elevon_s = 0.2;
+
 cfg.runtime_control.enable_file_control = true;
 cfg.runtime_control.file = fullfile(fileparts(mfilename("fullpath")), "runtime_control.txt");
 cfg.runtime_control.check_period = 0.2;
@@ -56,6 +60,8 @@ cfg.user.init.heading_deg = cfg.init.heading_deg;
 cfg.user.model.slipstream_enable = cfg.model.slipstream_enable;
 cfg.user.model.slipstream_ff_enable = cfg.model.slipstream_ff_enable;
 cfg.user.model.aero_body_enable = cfg.model.aero_body_enable;
+cfg.user.actuator_delay.motor_s = cfg.actuator_delay.motor_s;
+cfg.user.actuator_delay.elevon_s = cfg.actuator_delay.elevon_s;
 cfg.user.hover.altitude_m = 20;
 cfg.user.hover.Euler_deg = [0; 90; cfg.init.heading_deg];
 cfg.user.hover.u0 = zeros(12, 1);
@@ -82,7 +88,7 @@ cfg.stand.settle_time_s = 20;
 cfg.stand.use_cached_settled_state = true;
 cfg.stand.cache_file = fullfile(fileparts(mfilename("fullpath")), ...
     "cache", "stand_static_settled_state.mat");
-cfg.stand.release_throttle = 0.4;
+cfg.stand.release_throttle = 0.5;
 cfg.stand.release_hold_s = 0.1;
 
 cfg.landing.liftoff_confirm_s = 0.05;
@@ -137,6 +143,9 @@ if isfield(cfg.user, "init")
 end
 if isfield(cfg.user, "model")
     cfg.model = merge_user_struct(cfg.model, cfg.user.model);
+end
+if isfield(cfg.user, "actuator_delay")
+    cfg.actuator_delay = merge_user_struct(cfg.actuator_delay, cfg.user.actuator_delay);
 end
 if isfield(cfg.user, "hover")
     cfg.hover = merge_user_struct(cfg.hover, cfg.user.hover);
