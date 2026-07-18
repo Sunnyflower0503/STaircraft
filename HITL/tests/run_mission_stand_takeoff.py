@@ -303,6 +303,10 @@ def main():
         if mission_start_result != mavutil.mavlink.MAV_RESULT_ACCEPTED:
             raise RuntimeError(f"PX4 rejected mission start with result {mission_start_result}")
 
+        # Enable plant integration only after PX4 has accepted the mission.
+        # The stand-release state machine still holds the aircraft until launch thrust.
+        runtime_file.write_text("force_enable=1\n", encoding="utf-8")
+
         started = time.monotonic()
         last_print = -1.0
         state = {"mission": -1, "vtol": -1, "landed": -1, "armed": False}
@@ -312,6 +316,7 @@ def main():
         attitude_target = [math.nan] * 3
         navigation = [math.nan] * 3
         shell_requested = False
+        tecs_requested = False
         last_gcs_heartbeat = -1.0
         while time.monotonic() - started < args.duration:
             msg = master.recv_match(
@@ -379,6 +384,13 @@ def main():
                     "listener position_setpoint_triplet -n 1",
                 )
                 shell_requested = True
+
+            if elapsed >= 9.0 and not tecs_requested:
+                send_shell_command(
+                    master,
+                    "listener tecs_status -n 1\nlistener airspeed_validated -n 1",
+                )
+                tecs_requested = True
 
             if elapsed - last_print >= 1.0:
                 throttle = sum(servo[:4]) / 4 if not math.isnan(servo[0]) else math.nan
