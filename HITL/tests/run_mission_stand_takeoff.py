@@ -11,6 +11,24 @@ from pathlib import Path
 from pymavlink import mavutil
 
 
+def send_gcs_heartbeat(master):
+    master.mav.heartbeat_send(
+        mavutil.mavlink.MAV_TYPE_GCS,
+        mavutil.mavlink.MAV_AUTOPILOT_INVALID,
+        0,
+        0,
+        mavutil.mavlink.MAV_STATE_ACTIVE,
+    )
+
+
+def quaternion_to_euler_deg(q):
+    w, x, y, z = (float(value) for value in q)
+    roll = math.atan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y))
+    pitch = math.asin(max(-1.0, min(1.0, 2.0 * (w * y - z * x))))
+    yaw = math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+    return [math.degrees(roll), math.degrees(pitch), math.degrees(yaw)]
+
+
 def upload_mission(master, items):
     master.mav.mission_clear_all_send(master.target_system, master.target_component)
     clear_ack = master.recv_match(type="MISSION_ACK", blocking=True, timeout=5)
@@ -25,6 +43,7 @@ def upload_mission(master, items):
     sent = set()
     deadline = time.time() + 15
     while time.time() < deadline:
+        send_gcs_heartbeat(master)
         msg = master.recv_match(
             type=["MISSION_REQUEST", "MISSION_REQUEST_INT", "MISSION_ACK"],
             blocking=True,
@@ -64,6 +83,7 @@ def upload_mission(master, items):
 def wait_command_ack(master, command, timeout=5):
     deadline = time.time() + timeout
     while time.time() < deadline:
+        send_gcs_heartbeat(master)
         msg = master.recv_match(type="COMMAND_ACK", blocking=True, timeout=0.5)
         if msg is not None and int(msg.command) == int(command):
             return int(msg.result)
@@ -97,6 +117,24 @@ def set_int_param(master, name, value):
     )
 
 
+def send_shell_command(master, command):
+    data = list((command + "\n").encode())
+    flags = (
+        mavutil.mavlink.SERIAL_CONTROL_FLAG_EXCLUSIVE
+        | mavutil.mavlink.SERIAL_CONTROL_FLAG_RESPOND
+    )
+    for offset in range(0, len(data), 70):
+        chunk = data[offset : offset + 70]
+        master.mav.serial_control_send(
+            mavutil.mavlink.SERIAL_CONTROL_DEV_SHELL,
+            flags,
+            0,
+            0,
+            len(chunk),
+            chunk + [0] * (70 - len(chunk)),
+        )
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", default="COM5")
@@ -111,6 +149,7 @@ def main():
     heartbeat = master.wait_heartbeat(timeout=15)
     if heartbeat is None:
         raise RuntimeError(f"No PX4 heartbeat on {args.port}")
+    send_gcs_heartbeat(master)
 
     try:
         set_int_param(master, "COM_RC_IN_MODE", 4)
@@ -118,6 +157,7 @@ def main():
         global_position = None
         position_warmup_deadline = time.time() + 4.0
         while time.time() < position_warmup_deadline:
+            send_gcs_heartbeat(master)
             candidate = master.recv_match(type="GLOBAL_POSITION_INT", blocking=True, timeout=0.5)
             if candidate is not None:
                 global_position = candidate
@@ -175,12 +215,15 @@ def main():
 
         transition_deadline = time.time() + 8
         while time.time() < transition_deadline:
+            send_gcs_heartbeat(master)
             extended = master.recv_match(type="EXTENDED_SYS_STATE", blocking=True, timeout=0.5)
             if extended is not None and extended.vtol_state == mavutil.mavlink.MAV_VTOL_STATE_FW:
                 break
         else:
             raise RuntimeError("PX4 did not reach fixed-wing state before mission start")
-        time.sleep(2.0)
+        for _ in range(4):
+            send_gcs_heartbeat(master)
+            time.sleep(0.5)
 
         items = [
             {
@@ -265,6 +308,11 @@ def main():
         state = {"mission": -1, "vtol": -1, "landed": -1, "armed": False}
         servo = [math.nan] * 8
         position = [math.nan] * 5
+        attitude = [math.nan] * 3
+        attitude_target = [math.nan] * 3
+        navigation = [math.nan] * 3
+        shell_requested = False
+        last_gcs_heartbeat = -1.0
         while time.monotonic() - started < args.duration:
             msg = master.recv_match(
                 type=[
@@ -273,8 +321,12 @@ def main():
                     "MISSION_CURRENT",
                     "SERVO_OUTPUT_RAW",
                     "GLOBAL_POSITION_INT",
+                    "ATTITUDE",
+                    "ATTITUDE_TARGET",
+                    "NAV_CONTROLLER_OUTPUT",
                     "STATUSTEXT",
                     "COMMAND_ACK",
+                    "SERIAL_CONTROL",
                 ],
                 blocking=True,
                 timeout=0.2,
@@ -300,19 +352,44 @@ def main():
                         msg.vy * 1e-2,
                         msg.vz * 1e-2,
                     ]
+                elif msg_type == "ATTITUDE":
+                    attitude = [math.degrees(msg.roll), math.degrees(msg.pitch), math.degrees(msg.yaw)]
+                elif msg_type == "ATTITUDE_TARGET":
+                    attitude_target = quaternion_to_euler_deg(msg.q)
+                elif msg_type == "NAV_CONTROLLER_OUTPUT":
+                    navigation = [float(msg.nav_roll), float(msg.nav_bearing), float(msg.xtrack_error)]
                 elif msg_type == "STATUSTEXT":
                     print(f"STATUSTEXT[{msg.severity}]: {msg.text}")
                 elif msg_type == "COMMAND_ACK":
                     print(f"COMMAND_ACK command={msg.command} result={msg.result}")
+                elif msg_type == "SERIAL_CONTROL" and msg.count:
+                    shell_text = bytes(msg.data[: msg.count]).decode(errors="replace")
+                    print(shell_text, end="")
 
             elapsed = time.monotonic() - started
+            if elapsed - last_gcs_heartbeat >= 0.5:
+                send_gcs_heartbeat(master)
+                last_gcs_heartbeat = elapsed
+
+            if elapsed >= 1.5 and not shell_requested:
+                send_shell_command(
+                    master,
+                    "listener vehicle_status -n 1\n"
+                    "listener vehicle_control_mode -n 1\n"
+                    "listener position_setpoint_triplet -n 1",
+                )
+                shell_requested = True
+
             if elapsed - last_print >= 1.0:
                 throttle = sum(servo[:4]) / 4 if not math.isnan(servo[0]) else math.nan
                 print(
                     f"t={elapsed:5.1f} armed={int(state['armed'])} mission={state['mission']} "
                     f"vtol={state['vtol']} landed={state['landed']} main_pwm={throttle:.0f} "
                     f"amsl={position[0]:.1f} rel_alt={position[1]:+.1f} "
-                    f"vel_ned=[{position[2]:+.1f} {position[3]:+.1f} {position[4]:+.1f}]"
+                    f"vel_ned=[{position[2]:+.1f} {position[3]:+.1f} {position[4]:+.1f}] "
+                    f"rpy=[{attitude[0]:+.1f} {attitude[1]:+.1f} {attitude[2]:+.1f}] "
+                    f"rpy_sp=[{attitude_target[0]:+.1f} {attitude_target[1]:+.1f} {attitude_target[2]:+.1f}] "
+                    f"nav=[roll={navigation[0]:+.1f} bearing={navigation[1]:+.0f} xtrack={navigation[2]:+.1f}]"
                 )
                 last_print = elapsed
     finally:
