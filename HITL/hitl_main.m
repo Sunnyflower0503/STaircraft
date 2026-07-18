@@ -49,7 +49,8 @@ while t < max_time_s
 
     uav = state_to_uavdata_like(t, x, u, param, cfg);
     payload = uavdata_to_hil_state_quaternion_payload(uav, cfg);
-    tx_bytes = mavlink_encode_hil_state_quaternion(payload, cfg);
+    sensor_payload = uavdata_to_hil_sensor_payload(uav, cfg);
+    tx_bytes = mavlink_encode_hil_bundle(sensor_payload, payload, cfg);
     serial_write_bytes(ser, tx_bytes);
 
     if t - last_print_t >= 1

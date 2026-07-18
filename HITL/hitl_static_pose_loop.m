@@ -73,7 +73,6 @@ plant_time_s = 0;
 first_servo_reported = false;
 no_servo_warning_printed = false;
 ser = [];
-cleanup_obj = onCleanup(@() cleanup_static_run(fileparts(mfilename("fullpath")), stats, ser));
 
 try
     ser = serial_open(cfg);
@@ -86,6 +85,7 @@ catch ME
     fprintf(2, "- 检查波特率是否为 %d。\n", cfg.serial.baudrate);
     rethrow(ME);
 end
+cleanup_obj = onCleanup(@() cleanup_static_run(ser, cfg.runtime_control.file));
 
 fprintf("[HITL STATIC] Serial opened: %s @ %d. Entering frozen-pose loop.\n", ...
     cfg.serial.port, cfg.serial.baudrate);
@@ -136,9 +136,12 @@ while true
         contact_diag = hitl_ground_contact_diagnostics(x, param);
     end
 
-    uav = state_to_uavdata_like(plant_time_s, x, u, param, cfg);
+    % Sensor sample time must continue while the plant state is frozen;
+    % otherwise PX4 rejects repeated HIL_SENSOR timestamps as stale.
+    uav = state_to_uavdata_like(elapsed_s, x, u, param, cfg);
     payload = uavdata_to_hil_state_quaternion_payload(uav, cfg);
-    tx_bytes = mavlink_encode_hil_state_quaternion(payload, cfg);
+    sensor_payload = uavdata_to_hil_sensor_payload(uav, cfg);
+    tx_bytes = mavlink_encode_hil_bundle(sensor_payload, payload, cfg);
     serial_write_bytes(ser, tx_bytes);
 
     stats.tx_bytes_total = stats.tx_bytes_total + numel(tx_bytes);
@@ -312,7 +315,7 @@ row = double([msg.servo1_raw, msg.servo2_raw, msg.servo3_raw, msg.servo4_raw, ..
     msg.servo5_raw, msg.servo6_raw, msg.servo7_raw, msg.servo8_raw]);
 end
 
-function cleanup_static_run(hitl_dir, stats, ser)
+function cleanup_static_run(ser, runtime_control_file)
 try
     if ~isempty(ser)
         clear ser;
@@ -320,13 +323,16 @@ try
 catch
 end
 try
-    if strlength(string(stats.log_file)) == 0
-        stats.log_file = create_log_file(hitl_dir, string(stats.mode));
+    if strlength(string(runtime_control_file)) > 0
+        fid = fopen(runtime_control_file, "w");
+
+        if fid >= 0
+            file_cleanup = onCleanup(@() fclose(fid)); %#ok<NASGU>
+            fprintf(fid, "force_enable=0\n");
+        end
     end
-    save(stats.log_file, "stats");
-    fprintf("\n[HITL STATIC] Saved run log: %s\n", stats.log_file);
 catch ME
-    fprintf(2, "\n[HITL STATIC] Failed to save run log: %s\n", ME.message);
+    fprintf(2, "\n[HITL STATIC] Failed to freeze runtime control: %s\n", ME.message);
 end
 end
 

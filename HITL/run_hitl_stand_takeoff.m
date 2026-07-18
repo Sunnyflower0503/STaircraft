@@ -186,9 +186,10 @@ while ~stop_after_landing
         stop_after_landing = true;
     end
 
-    uav = state_to_uavdata_like(plant_time_s, x, u, param, cfg);
+    uav = state_to_uavdata_like(wall_time_s, x, u, param, cfg);
     payload = uavdata_to_hil_state_quaternion_payload(uav, cfg);
-    tx_bytes = mavlink_encode_hil_state_quaternion(payload, cfg);
+    sensor_payload = uavdata_to_hil_sensor_payload(uav, cfg);
+    tx_bytes = mavlink_encode_hil_bundle(sensor_payload, payload, cfg);
     serial_write_bytes(ser, tx_bytes);
 
     stats.tx_bytes_total = stats.tx_bytes_total + numel(tx_bytes);

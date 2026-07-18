@@ -98,9 +98,69 @@ class MavlinkBridge:
         self.encoder.send(msg, force_mavlink1=False)
         return self.output.bytes()
 
+    def encode_hil_sensor(self, payload):
+        msg = mavlink2.MAVLink_hil_sensor_message(
+            int(payload["time_usec"]),
+            float(payload["xacc"]),
+            float(payload["yacc"]),
+            float(payload["zacc"]),
+            float(payload["xgyro"]),
+            float(payload["ygyro"]),
+            float(payload["zgyro"]),
+            float(payload["xmag"]),
+            float(payload["ymag"]),
+            float(payload["zmag"]),
+            float(payload["abs_pressure"]),
+            float(payload["diff_pressure"]),
+            float(payload["pressure_alt"]),
+            float(payload["temperature"]),
+            int(payload["fields_updated"]),
+            int(payload.get("id", 0)),
+        )
+        self.output.clear()
+        self.encoder.send(msg, force_mavlink1=False)
+        return self.output.bytes()
+
+    def encode_hil_sensor_and_state(self, sensor, state):
+        sensor_msg = mavlink2.MAVLink_hil_sensor_message(
+            int(sensor["time_usec"]),
+            float(sensor["xacc"]), float(sensor["yacc"]), float(sensor["zacc"]),
+            float(sensor["xgyro"]), float(sensor["ygyro"]), float(sensor["zgyro"]),
+            float(sensor["xmag"]), float(sensor["ymag"]), float(sensor["zmag"]),
+            float(sensor["abs_pressure"]), float(sensor["diff_pressure"]),
+            float(sensor["pressure_alt"]), float(sensor["temperature"]),
+            int(sensor["fields_updated"]), int(sensor.get("id", 0)),
+        )
+        q = list(state["attitude_quaternion"])
+        state_msg = mavlink2.MAVLink_hil_state_quaternion_message(
+            int(state["time_usec"]),
+            [float(q[0]), float(q[1]), float(q[2]), float(q[3])],
+            float(state["rollspeed"]), float(state["pitchspeed"]),
+            float(state["yawspeed"]), int(state["lat"]), int(state["lon"]),
+            int(state["alt"]), int(state["vx"]), int(state["vy"]), int(state["vz"]),
+            int(state["ind_airspeed"]), int(state["true_airspeed"]),
+            int(state["xacc"]), int(state["yacc"]), int(state["zacc"]),
+        )
+        self.output.clear()
+        self.encoder.send(sensor_msg, force_mavlink1=False)
+        self.encoder.send(state_msg, force_mavlink1=False)
+        return self.output.bytes()
+
     def encode_manual_control(self, target, x, y, z, r, buttons=0):
         msg = self.encoder.manual_control_encode(
             int(target), int(x), int(y), int(z), int(r), int(buttons)
+        )
+        self.output.clear()
+        self.encoder.send(msg, force_mavlink1=False)
+        return self.output.bytes()
+
+    def encode_gcs_heartbeat(self):
+        msg = self.encoder.heartbeat_encode(
+            mavlink2.MAV_TYPE_GCS,
+            mavlink2.MAV_AUTOPILOT_INVALID,
+            0,
+            0,
+            mavlink2.MAV_STATE_ACTIVE,
         )
         self.output.clear()
         self.encoder.send(msg, force_mavlink1=False)

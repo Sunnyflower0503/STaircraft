@@ -1,4 +1,4 @@
-function result = test_native_rotor_yaw_disturbance(sample_time_s, yaw_pulse_milli, throttle_milli, virtual_xz_gain, pulse_duration_s, external_moment_body_nm, recovery_duration_s, flight_mode, external_force_ned_n)
+function result = test_native_rotor_yaw_disturbance(sample_time_s, yaw_pulse_milli, throttle_milli, virtual_xz_gain, pulse_duration_s, external_moment_body_nm, recovery_duration_s, flight_mode, external_force_ned_n, manual_xy_milli)
 %TEST_NATIVE_ROTOR_YAW_DISTURBANCE Native MATLAB HITL yaw pulse test.
 % COM_RC_IN_MODE must already be 1 (direct MAVLink joystick). The caller
 % must restore it to 0 afterward.
@@ -34,6 +34,9 @@ end
 if nargin < 9 || isempty(external_force_ned_n)
     external_force_ned_n = zeros(3, 1);
 end
+if nargin < 10 || isempty(manual_xy_milli)
+    manual_xy_milli = [0; 0];
+end
 validateattributes(sample_time_s, {'numeric'}, {'scalar', 'finite', 'positive'});
 validateattributes(yaw_pulse_milli, {'numeric'}, ...
     {'scalar', 'finite', 'integer', '>=', -1000, '<=', 1000});
@@ -51,12 +54,27 @@ validateattributes(external_force_ned_n, {'numeric'}, ...
     {'vector', 'numel', 3, 'finite', 'real'});
 external_force_ned_n = double(external_force_ned_n(:));
 validateattributes(recovery_duration_s, {'numeric'}, ...
-    {'scalar', 'finite', '>=', 3.0, '<=', 15.0});
+    {'scalar', 'finite', '>=', 3.0, '<=', 70.0});
+validateattributes(manual_xy_milli, {'numeric'}, ...
+    {'vector', 'numel', 2, 'finite', 'integer', '>=', -1000, '<=', 1000});
+manual_xy_milli = double(manual_xy_milli(:));
 
-if nargin >= 8 && lower(string(flight_mode)) == "position"
-    pulse_start_s = 10.0;
+hil_warmup_s = 3.0;
+transition_s = hil_warmup_s;
+control_mode_s = transition_s + 0.8;
+arm_start_s = control_mode_s + 1.0;
+spool_start_s = arm_start_s;
+plant_release_s = spool_start_s + 2.0;
+position_mode_s = plant_release_s + 0.8;
+
+if nargin >= 8 && lower(string(flight_mode)) == "altitude"
+    % ALTCTL/POSCTL need time to finish the frozen-plant takeoff-thrust
+    % handoff and capture a settled vertical setpoint before disturbance.
+    pulse_start_s = plant_release_s + 8.0;
+elseif nargin >= 8 && lower(string(flight_mode)) == "position"
+    pulse_start_s = plant_release_s + 5.0;
 else
-    pulse_start_s = 6.5;
+    pulse_start_s = plant_release_s + 1.5;
 end
 pulse_end_s = pulse_start_s + pulse_duration_s;
 test_end_s = pulse_end_s + recovery_duration_s;
@@ -77,6 +95,8 @@ cfg.runtime_control.enable_file_control = false;
 cfg.hover.Euler_deg = [0; 90; 0];
 cfg.mavlink.sysid = 245;
 cfg.mavlink.compid = 190;
+command_cfg = cfg;
+command_cfg.serial.port = "COM5";
 
 param = init_param_zx();
 param = apply_hitl_model_switches(param, cfg);
@@ -85,7 +105,8 @@ q_initial = x(7:10);
 
 manual_low = pymavlink_encode_manual_control(1, 0, 0, 0, 0, 0, cfg);
 manual_hover = pymavlink_encode_manual_control(1, 0, 0, throttle_milli, 0, 0, cfg);
-manual_pulse = pymavlink_encode_manual_control(1, 0, 0, throttle_milli, yaw_pulse_milli, 0, cfg);
+manual_pulse = pymavlink_encode_manual_control(1, manual_xy_milli(1), manual_xy_milli(2), ...
+    throttle_milli, yaw_pulse_milli, 0, cfg);
 manual_takeoff = pymavlink_encode_manual_control(1, 0, 0, 700, 0, 0, cfg);
 cmd_transition_mc = pymavlink_encode_command_long(1, 0, 3000, [3 0 0 0 0 0 0], cfg);
 mode_number = struct("stabilized", 7, "altitude", 2, "position", 3);
@@ -94,9 +115,11 @@ cmd_control_mode = pymavlink_encode_command_long(1, 0, 176, ...
 cmd_altitude_mode = pymavlink_encode_command_long(1, 0, 176, [81 2 0 0 0 0 0], cfg);
 cmd_arm = pymavlink_encode_command_long(1, 0, 400, [1 21196 0 0 0 0 0], cfg);
 cmd_force_disarm = pymavlink_encode_command_long(1, 0, 400, [0 21196 0 0 0 0 0], cfg);
+gcs_heartbeat = pymavlink_encode_gcs_heartbeat(cfg);
 
 ser = serial_open(cfg);
-cleanup_obj = onCleanup(@() safe_disarm_and_close(ser, cmd_force_disarm, manual_low));
+command_ser = serial_open(command_cfg);
+cleanup_obj = onCleanup(@() safe_disarm_and_close(command_ser, cmd_force_disarm, manual_low));
 
 history = init_history();
 last_servo = nan(1, 8);
@@ -112,6 +135,7 @@ transition_sent = false;
 control_mode_sent = false;
 position_mode_sent = false;
 last_arm_attempt_s = -inf;
+last_gcs_heartbeat_s = -inf;
 
 fprintf("[NATIVE DIST] COM9 native MATLAB loop started. mode=%s Target dt=%.3f s, throttle=%d/1000, yaw r=%d/1000, pulse=%.2f s, Mext=[%+.3f %+.3f %+.3f] Nm Fned=[%+.2f %+.2f %+.2f] N\n", ...
     flight_mode, cfg.sample_time, throttle_milli, yaw_pulse_milli, pulse_duration_s, ...
@@ -125,9 +149,15 @@ while true
         break;
     end
 
+    if wall_t - last_gcs_heartbeat_s >= 0.5
+        serial_write_bytes(command_ser, gcs_heartbeat);
+        last_gcs_heartbeat_s = wall_t;
+    end
+
     bytes = serial_read_bytes(ser);
+    command_bytes = serial_read_bytes(command_ser);
     servo_msg = mavlink_decode_servo_output_raw(bytes, cfg);
-    diagnostics = pymavlink_decode_diagnostics(bytes, cfg);
+    diagnostics = pymavlink_decode_diagnostics([bytes; command_bytes], cfg);
     if diagnostics.command_ack_new
         event = sprintf("wall=%.2f COMMAND_ACK command=%d result=%d", ...
             wall_t, diagnostics.command, diagnostics.ack_result);
@@ -146,7 +176,7 @@ while true
                       servo_msg.servo5_raw servo_msg.servo6_raw servo_msg.servo7_raw servo_msg.servo8_raw];
     end
 
-    if wall_t >= 4.8 && (all(isnan(last_servo)) || max(last_servo(1:4)) < 1000)
+    if wall_t >= plant_release_s + 0.8 && (all(isnan(last_servo)) || max(last_servo(1:4)) < 1000)
         aborted = true;
         abort_reason = "arming/output confirmation failed";
         break;
@@ -159,7 +189,10 @@ while true
         external_force_now = external_force_ned_n;
     end
 
-    if wall_t >= 5.0
+    % Keep the airborne plant frozen during a short, explicit spool window so
+    % the four main outputs can reach the validated hover point before the
+    % dynamics are released.
+    if wall_t >= plant_release_s
         if isnan(last_step_wall)
             step_s = cfg.sample_time;
         else
@@ -172,44 +205,45 @@ while true
         plant_time = plant_time + step_s;
     end
 
-    uav = state_to_uavdata_like(plant_time, x, u, param, cfg);
+    uav = state_to_uavdata_like(wall_t, x, u, param, cfg);
     payload = uavdata_to_hil_state_quaternion_payload(uav, cfg);
-    serial_write_bytes(ser, mavlink_encode_hil_state_quaternion(payload, cfg));
+    sensor_payload = uavdata_to_hil_sensor_payload(uav, cfg);
+    serial_write_bytes(ser, mavlink_encode_hil_bundle(sensor_payload, payload, cfg));
 
-    if wall_t < 3.0
-        serial_write_bytes(ser, manual_low);
-    elseif flight_mode ~= "stabilized" && wall_t < 5.0
-        % The HIL plant is frozen during this interval. A short climb command
-        % lets the PX4 takeoff state machine leave the landed/ramp state;
-        % center the stick when dynamics are released at wall_t=5 s.
-        serial_write_bytes(ser, manual_takeoff);
+    if wall_t < spool_start_s
+        serial_write_bytes(command_ser, manual_low);
+    elseif flight_mode ~= "stabilized" && wall_t < plant_release_s
+        % ALTCTL/POSCTL interpret the throttle stick as climb rate. Use a
+        % short frozen-plant climb request so the takeoff/ramp state reaches
+        % active thrust, then center the stick when dynamics are released.
+        serial_write_bytes(command_ser, manual_takeoff);
     elseif wall_t < pulse_start_s || wall_t >= pulse_end_s
-        serial_write_bytes(ser, manual_hover);
+        serial_write_bytes(command_ser, manual_hover);
     else
-        serial_write_bytes(ser, manual_pulse);
+        serial_write_bytes(command_ser, manual_pulse);
     end
 
-    if wall_t >= 0.4 && ~transition_sent
-        serial_write_bytes(ser, cmd_transition_mc);
+    if wall_t >= transition_s && ~transition_sent
+        serial_write_bytes(command_ser, cmd_transition_mc);
         transition_sent = true;
-    elseif wall_t >= 1.2 && ~control_mode_sent
+    elseif wall_t >= control_mode_s && ~control_mode_sent
         if flight_mode == "position"
             % Horizontal position is not valid early enough for POSCTL.
             % Enter ALTCTL for arming/takeoff and switch after HIL aiding is valid.
-            serial_write_bytes(ser, cmd_altitude_mode);
+            serial_write_bytes(command_ser, cmd_altitude_mode);
         else
-            serial_write_bytes(ser, cmd_control_mode);
+            serial_write_bytes(command_ser, cmd_control_mode);
         end
         control_mode_sent = true;
-    elseif wall_t >= 2.2 && wall_t < 4.6 ...
+    elseif wall_t >= arm_start_s && wall_t < plant_release_s + 1.6 ...
             && (all(isnan(last_servo)) || max(last_servo(1:4)) < 1000) ...
             && wall_t - last_arm_attempt_s >= 0.7
-        serial_write_bytes(ser, cmd_arm);
+        serial_write_bytes(command_ser, cmd_arm);
         last_arm_attempt_s = wall_t;
     end
 
-    if flight_mode == "position" && wall_t >= 5.8 && ~position_mode_sent
-        serial_write_bytes(ser, cmd_control_mode);
+    if flight_mode == "position" && wall_t >= position_mode_s && ~position_mode_sent
+        serial_write_bytes(command_ser, cmd_control_mode);
         position_mode_sent = true;
     end
 
@@ -236,7 +270,7 @@ while true
     end
 
     if wall_t - last_print >= 0.5
-        phase = phase_name(wall_t, pulse_start_s, pulse_end_s);
+        phase = phase_name(wall_t, plant_release_s, pulse_start_s, pulse_end_s);
         spin_deg = history.relative_rotation_deg(1, end);
         tilt_deg = norm(history.relative_rotation_deg(2:3, end));
         fprintf("[NATIVE DIST] wall=%.2f plant=%.2f phase=%s pos=[%+.2f %+.2f %+.2f] vel=[%+.2f %+.2f %+.2f] pqr=[%+.4f %+.4f %+.4f] err=%.2f spin=%+.2f tilt=%.2f tip=%g/%g servo=[%s]\n", ...
@@ -267,7 +301,7 @@ while true
     next_tick_s = next_tick_s + cfg.sample_time;
 end
 
-safe_disarm_and_close(ser, cmd_force_disarm, manual_low);
+safe_disarm_and_close(command_ser, cmd_force_disarm, manual_low);
 clear ser;
 
 result = struct();
@@ -287,6 +321,7 @@ result.virtual_xz_gain = virtual_xz_gain;
 result.pulse_duration_s = pulse_duration_s;
 result.external_moment_body_nm = external_moment_body_nm;
 result.external_force_ned_n = external_force_ned_n;
+result.manual_xy_milli = manual_xy_milli;
 result.recovery_duration_s = recovery_duration_s;
 result.flight_mode = flight_mode;
 result.diagnostic_events = diagnostic_events;
@@ -372,9 +407,8 @@ u_model(1:2) = min(max(u_model(1:2) + r_comp, 0), 1); % MAIN3
 u_model(7:8) = min(max(u_model(7:8) - r_comp, 0), 1); % MAIN4
 end
 
-function name = phase_name(t, pulse_start_s, pulse_end_s)
-if t < 3.0, name = "setup";
-elseif t < 5.0, name = "prespool";
+function name = phase_name(t, plant_release_s, pulse_start_s, pulse_end_s)
+if t < plant_release_s, name = "setup";
 elseif t < pulse_start_s, name = "baseline";
 elseif t < pulse_end_s, name = "pulse";
 else, name = "recovery";
