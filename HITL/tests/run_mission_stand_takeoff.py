@@ -198,6 +198,15 @@ def main():
     parser.add_argument("--back-transition-gate-time", type=float, default=0.5)
     parser.add_argument("--back-transition-throttle", type=float, default=0.40)
     parser.add_argument("--mc-waypoint-acceptance", type=float, default=10.0)
+    parser.add_argument("--mc-speed", type=float, default=1.5)
+    parser.add_argument("--pentagon-center", type=float, default=550.0)
+    parser.add_argument("--pentagon-radius", type=float, default=220.0)
+    parser.add_argument("--pentagon-fw-acceptance", type=float, default=100.0)
+    parser.add_argument(
+        "--pentagon-mission",
+        action="store_true",
+        help="Arm in fixed-wing Stabilized, fly a closed pentagon, back-transition, and hold position",
+    )
     parser.add_argument(
         "--full-landing",
         action="store_true",
@@ -215,6 +224,9 @@ def main():
         help="Request a fixed-wing to multicopter transition this many seconds after Mission start",
     )
     args = parser.parse_args()
+    effective_fw_acceptance = (
+        args.pentagon_fw_acceptance if args.pentagon_mission else args.fw_wp_acceptance
+    )
 
     runtime_file = Path(__file__).resolve().parents[1] / "runtime_control.txt"
     master = mavutil.mavlink_connection(args.port, baud=115200, source_system=250)
@@ -227,7 +239,7 @@ def main():
         runtime_file.write_text("force_enable=0\n", encoding="utf-8")
         set_int_param_and_wait(master, "COM_RC_IN_MODE", 4)
         set_int_param_and_wait(master, "TD_FW_TKO_EN", 0)
-        set_float_param_and_wait(master, "TD_FW_WP_ACC", args.fw_wp_acceptance)
+        set_float_param_and_wait(master, "TD_FW_WP_ACC", effective_fw_acceptance)
         set_float_param_and_wait(master, "TD_BTR_ARSP", args.back_transition_airspeed)
         set_float_param_and_wait(master, "TD_BTR_GATE_T", args.back_transition_gate_time)
         set_float_param_and_wait(master, "TD_BTR_THR", args.back_transition_throttle)
@@ -247,6 +259,14 @@ def main():
         current_alt_m = global_position.alt * 1e-3
         takeoff_alt_m = current_alt_m + args.takeoff_alt
         latitude_units_per_metre = 1e7 / 111320.0
+        longitude_units_per_metre = latitude_units_per_metre * math.cos(math.radians(latitude * 1e-7))
+
+        def local_coordinate(north_m, east_m=0.0):
+            return (
+                latitude + round(north_m * latitude_units_per_metre),
+                longitude + round(east_m * longitude_units_per_metre),
+            )
+
         takeoff_latitude = latitude + round(args.takeoff_distance * latitude_units_per_metre)
         waypoint_latitude = latitude + round(args.waypoint_distance * latitude_units_per_metre)
         waypoint2_latitude = latitude + round(args.waypoint2_distance * latitude_units_per_metre)
@@ -325,7 +345,103 @@ def main():
                 "z": takeoff_alt_m,
             },
         ]
-        if args.full_landing or args.fw_only:
+        transition_item_seq = None
+        mc_waypoint_seq = None
+        mc_hold_seq = None
+        pentagon_points = []
+
+        if args.pentagon_mission:
+            items = [items[0]]
+            pentagon_angles = [math.pi, 3 * math.pi / 5, math.pi / 5, -math.pi / 5, -3 * math.pi / 5]
+
+            for angle in pentagon_angles:
+                north_m = args.pentagon_center + args.pentagon_radius * math.cos(angle)
+                east_m = args.pentagon_radius * math.sin(angle)
+                pentagon_points.append((north_m, east_m))
+                point_lat, point_lon = local_coordinate(north_m, east_m)
+                items.append(
+                    {
+                        "frame": mavutil.mavlink.MAV_FRAME_GLOBAL_INT,
+                        "command": mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
+                        "param2": effective_fw_acceptance,
+                        "x": point_lat,
+                        "y": point_lon,
+                        "z": takeoff_alt_m,
+                    }
+                )
+
+            # Return to vertex 1 to complete all five polygon edges.
+            first_lat, first_lon = local_coordinate(*pentagon_points[0])
+            items.append(
+                {
+                    "frame": mavutil.mavlink.MAV_FRAME_GLOBAL_INT,
+                    "command": mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
+                    "param2": effective_fw_acceptance,
+                    "x": first_lat,
+                    "y": first_lon,
+                    "z": takeoff_alt_m,
+                }
+            )
+            items.extend(
+                [
+                    {
+                        "frame": mavutil.mavlink.MAV_FRAME_MISSION,
+                        "command": mavutil.mavlink.MAV_CMD_DO_CHANGE_SPEED,
+                        "param1": 0.0,
+                        "param2": args.approach_airspeed,
+                        "param3": -1.0,
+                    },
+                    {
+                        "frame": mavutil.mavlink.MAV_FRAME_GLOBAL_INT,
+                        "command": mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
+                        "param2": 12.0,
+                        "x": descent_latitude,
+                        "y": longitude,
+                        "z": current_alt_m + args.transition_alt,
+                    },
+                ]
+            )
+            transition_item_seq = len(items)
+            items.append(
+                {
+                    "frame": mavutil.mavlink.MAV_FRAME_MISSION,
+                    "command": mavutil.mavlink.MAV_CMD_DO_VTOL_TRANSITION,
+                    "param1": mavutil.mavlink.MAV_VTOL_STATE_MC,
+                }
+            )
+            items.append(
+                {
+                    "frame": mavutil.mavlink.MAV_FRAME_MISSION,
+                    "command": mavutil.mavlink.MAV_CMD_DO_CHANGE_SPEED,
+                    "param1": 1.0,
+                    "param2": args.mc_speed,
+                    "param3": -1.0,
+                }
+            )
+            mc_waypoint_seq = len(items)
+            items.append(
+                {
+                    "frame": mavutil.mavlink.MAV_FRAME_GLOBAL_INT,
+                    "command": mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
+                    "param1": 2.0,
+                    "param2": args.mc_waypoint_acceptance,
+                    "x": landing_latitude,
+                    "y": longitude,
+                    "z": current_alt_m + args.transition_alt,
+                }
+            )
+            mc_hold_seq = len(items)
+            items.append(
+                {
+                    "frame": mavutil.mavlink.MAV_FRAME_GLOBAL_INT,
+                    "command": mavutil.mavlink.MAV_CMD_NAV_LOITER_UNLIM,
+                    "x": landing_latitude,
+                    "y": longitude,
+                    "z": current_alt_m + args.transition_alt,
+                }
+            )
+
+        elif args.full_landing or args.fw_only:
             transition_alt_m = current_alt_m + (
                 args.transition_alt if args.full_landing else args.takeoff_alt
             )
@@ -386,7 +502,15 @@ def main():
                 ]
             )
         upload_mission(master, items)
-        if args.full_landing:
+        if args.pentagon_mission:
+            print(
+                f"Pentagon mission uploaded: center={args.pentagon_center:.0f} m north, "
+                f"radius={args.pentagon_radius:.0f} m, five closed edges at +{args.takeoff_alt:.1f} m; "
+                f"FW acceptance={effective_fw_acceptance:.0f} m; "
+                f"descend at {args.descent_distance:.0f} m to +{args.transition_alt:.1f} m, "
+                f"transition and hold at {args.landing_distance:.0f} m north at {args.mc_speed:.1f} m/s"
+            )
+        elif args.full_landing:
             print(
                 f"Full mission uploaded: takeoff {args.takeoff_distance:.0f} m -> "
                 f"WP1 {args.waypoint_distance:.0f} m -> WP2 {args.waypoint2_distance:.0f} m "
@@ -407,25 +531,28 @@ def main():
                 f"start alt={current_alt_m:.1f} AMSL"
             )
 
-        current_heartbeat = master.recv_match(type="HEARTBEAT", blocking=True, timeout=2)
-        already_in_mission = (
-            current_heartbeat is not None
-            and mavutil.mode_string_v10(current_heartbeat) == "MISSION"
-        )
-        mode_result = mavutil.mavlink.MAV_RESULT_ACCEPTED if already_in_mission else None
-        if not already_in_mission:
+        def select_mode(mode_name):
+            mode_result = None
             for _ in range(5):
-                master.set_mode("MISSION")
+                master.set_mode(mode_name)
                 mode_result = wait_command_ack(master, mavutil.mavlink.MAV_CMD_DO_SET_MODE)
                 if mode_result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
-                    break
+                    return
                 current_heartbeat = master.recv_match(type="HEARTBEAT", blocking=True, timeout=1)
-                if current_heartbeat is not None and mavutil.mode_string_v10(current_heartbeat) == "MISSION":
-                    mode_result = mavutil.mavlink.MAV_RESULT_ACCEPTED
-                    break
+                if current_heartbeat is not None and mavutil.mode_string_v10(current_heartbeat) == mode_name:
+                    return
                 time.sleep(1.0)
-        if mode_result != mavutil.mavlink.MAV_RESULT_ACCEPTED:
-            raise RuntimeError(f"PX4 rejected AUTO.MISSION mode with result {mode_result}")
+
+            raise RuntimeError(f"PX4 rejected {mode_name} mode with result {mode_result}")
+
+        if args.pentagon_mission:
+            # Required operator-equivalent order: arm on the stand in fixed-wing
+            # Stabilized, then enter Mission while the launch key is still off.
+            select_mode("STABILIZED")
+
+        else:
+            select_mode("MISSION")
+
         master.mav.command_long_send(
             master.target_system,
             master.target_component,
@@ -442,6 +569,9 @@ def main():
         arm_result = wait_command_ack(master, mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM)
         if arm_result != mavutil.mavlink.MAV_RESULT_ACCEPTED:
             raise RuntimeError(f"PX4 rejected arming with result {arm_result}")
+
+        if args.pentagon_mission:
+            select_mode("MISSION")
         master.mav.command_long_send(
             master.target_system,
             master.target_component,
@@ -495,11 +625,16 @@ def main():
         transition_requested = False
         transition_reached = False
         landing_reached = False
+        pentagon_route_completed = False
+        fixed_point_reached = False
+        fixed_point_since = None
         fw_waypoints_reached = False
         fw_waypoints_reached_at = None
         launch_gate_violation = False
         first_launch_output_s = None
         last_gcs_heartbeat = -1.0
+        last_mission_seq = -1
+        mission_progress_at = 0.0
         while time.monotonic() - started < args.duration:
             msg = master.recv_match(
                 type=[
@@ -559,6 +694,18 @@ def main():
                     print(shell_text, end="")
 
             elapsed = time.monotonic() - started
+            if state["mission"] != last_mission_seq:
+                last_mission_seq = state["mission"]
+                mission_progress_at = elapsed
+
+            if (
+                args.pentagon_mission
+                and 1 <= state["mission"] < transition_item_seq
+                and elapsed - mission_progress_at > 60.0
+            ):
+                raise RuntimeError(
+                    f"Pentagon mission stalled at item {state['mission']} for more than 60 s"
+                )
             if elapsed - last_gcs_heartbeat >= 0.5:
                 send_gcs_heartbeat(master)
                 last_gcs_heartbeat = elapsed
@@ -585,7 +732,7 @@ def main():
                 print(f"Requested FW->MC transition at t={elapsed:.2f}s")
 
             if (
-                (transition_requested or args.full_landing)
+                (transition_requested or args.full_landing or args.pentagon_mission)
                 and state["vtol"] == mavutil.mavlink.MAV_VTOL_STATE_MC
             ):
                 transition_reached = True
@@ -596,6 +743,33 @@ def main():
                 and state["landed"] == mavutil.mavlink.MAV_LANDED_STATE_ON_GROUND
             ):
                 landing_reached = True
+
+            target_distance_m = math.nan
+            if not math.isnan(position[5]):
+                north_to_landing = (landing_latitude - position[5]) / latitude_units_per_metre
+                east_to_landing = (longitude - position[6]) / longitude_units_per_metre
+                target_distance_m = math.hypot(north_to_landing, east_to_landing)
+
+            if args.pentagon_mission:
+                if transition_item_seq is not None and state["mission"] >= transition_item_seq:
+                    pentagon_route_completed = True
+
+                horizontal_speed_m_s = math.hypot(position[2], position[3])
+                fixed_point_ok = (
+                    transition_reached
+                    and mc_waypoint_seq is not None
+                    and state["mission"] >= mc_waypoint_seq
+                    and target_distance_m <= args.mc_waypoint_acceptance
+                    and horizontal_speed_m_s <= 1.0
+                )
+
+                if fixed_point_ok:
+                    if fixed_point_since is None:
+                        fixed_point_since = elapsed
+                    fixed_point_reached = elapsed - fixed_point_since >= 5.0
+
+                else:
+                    fixed_point_since = None
 
             if args.fw_only and state["mission"] >= 3:
                 if fw_waypoints_reached_at is None:
@@ -639,23 +813,11 @@ def main():
 
             if elapsed - last_print >= 1.0:
                 throttle = sum(servo[:4]) / 4 if not math.isnan(servo[0]) else math.nan
-                north_to_landing = (
-                    (landing_latitude - position[5]) / latitude_units_per_metre
-                    if not math.isnan(position[5])
-                    else math.nan
-                )
-                east_to_landing = (
-                    (longitude - position[6])
-                    / (latitude_units_per_metre * math.cos(math.radians(latitude * 1e-7)))
-                    if not math.isnan(position[6])
-                    else math.nan
-                )
-                landing_distance_m = math.hypot(north_to_landing, east_to_landing)
                 print(
                     f"t={elapsed:5.1f} armed={int(state['armed'])} mission={state['mission']} "
                     f"vtol={state['vtol']} landed={state['landed']} main_pwm={throttle:.0f} "
                     f"amsl={position[0]:.1f} rel_alt={position[1]:+.1f} "
-                    f"land_dist={landing_distance_m:.1f}m "
+                    f"target_dist={target_distance_m:.1f}m "
                     f"airspeed={airspeed_m_s:.1f} "
                     f"vel_ned=[{position[2]:+.1f} {position[3]:+.1f} {position[4]:+.1f}] "
                     f"rpy=[{attitude[0]:+.1f} {attitude[1]:+.1f} {attitude[2]:+.1f}] "
@@ -668,6 +830,10 @@ def main():
                 print(f"Position landing detected at t={elapsed:.2f}s")
                 break
 
+            if fixed_point_reached:
+                print(f"Pentagon mission position hold stable for 5 s at t={elapsed:.2f}s")
+                break
+
             if fw_waypoints_reached:
                 print(f"Two fixed-wing waypoints remained controlled for 5 s at t={elapsed:.2f}s")
                 break
@@ -676,18 +842,24 @@ def main():
             raise RuntimeError(
                 f"Stand-launch output released too early ({first_launch_output_s:.3f}s after switch)"
             )
-        if (args.transition_to_mc_at >= 0 or args.full_landing) and not transition_reached:
+        if (args.transition_to_mc_at >= 0 or args.full_landing or args.pentagon_mission) and not transition_reached:
             raise RuntimeError("PX4 did not reach multicopter state after FW->MC request")
         if args.full_landing and not landing_reached:
             raise RuntimeError("Full mission did not complete the multicopter position landing")
         if args.fw_only and not fw_waypoints_reached:
             raise RuntimeError("Fixed-wing mission did not complete and stabilize beyond waypoint 2")
-        if args.transition_to_mc_at >= 0 or args.full_landing:
+        if args.pentagon_mission and not pentagon_route_completed:
+            raise RuntimeError("Mission did not complete all five fixed-wing polygon edges")
+        if args.pentagon_mission and not fixed_point_reached:
+            raise RuntimeError("Multicopter did not establish a stable hold at the final target")
+        if args.transition_to_mc_at >= 0 or args.full_landing or args.pentagon_mission:
             print("FW->MC transition validation passed")
         if args.full_landing:
             print("Two-waypoint descent and position-landing mission passed")
         if args.fw_only:
             print("Two-waypoint fixed-wing tracking validation passed")
+        if args.pentagon_mission:
+            print("Stabilized-arm, stand-launch, closed-pentagon, back-transition, and position-hold mission passed")
     finally:
         runtime_file.write_text("force_enable=0\n", encoding="utf-8")
         force_disarm(master)
