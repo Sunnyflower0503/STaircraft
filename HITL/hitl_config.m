@@ -16,6 +16,8 @@ cfg.model.aero_body_enable = true;
 % Pure transport delays used by the fixed-wing stand-launch HITL runner.
 cfg.actuator_delay.motor_s = 0.3;
 cfg.actuator_delay.elevon_s = 0.2;
+cfg.actuator_delay.motor_tau_s = 0.0;
+cfg.actuator_delay.elevon_tau_s = 0.0;
 
 cfg.runtime_control.enable_file_control = true;
 cfg.runtime_control.file = fullfile(fileparts(mfilename("fullpath")), "runtime_control.txt");

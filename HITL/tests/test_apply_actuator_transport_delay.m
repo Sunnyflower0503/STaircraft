@@ -22,4 +22,17 @@ assert(max(abs(u(11:12) - u1(11:12))) < 1e-12);
 
 [u, ~] = apply_actuator_transport_delay(0.41, u1, state, cfg);
 assert(max(abs(u - u1)) < 1e-12);
+
+cfg.actuator_delay.motor_s = 0;
+cfg.actuator_delay.elevon_s = 0;
+cfg.actuator_delay.motor_tau_s = 0;
+cfg.actuator_delay.elevon_tau_s = 0.05;
+state = [];
+[~, state] = apply_actuator_transport_delay(0, u0, state, cfg);
+[u, state] = apply_actuator_transport_delay(0.05, u1, state, cfg);
+expected = u0(11:12) + (1 - exp(-1)) .* (u1(11:12) - u0(11:12));
+assert(max(abs(u(11:12) - expected)) < 1e-12);
+[u, ~] = apply_actuator_transport_delay(0.15, u1, state, cfg);
+assert(max(abs(u(11:12) - (u0(11:12) + (1 - exp(-3)) .* ...
+    (u1(11:12) - u0(11:12))))) < 1e-12);
 end

@@ -20,7 +20,9 @@ user.model.aero_body_enable = true;     % 气动力开关
 % Actuator pure transport delays used by run_hitl_stand_takeoff.m.
 % Set either value to 0 to bypass that delay without editing the runner.
 user.actuator_delay.motor_s = 0.0;
-user.actuator_delay.elevon_s = 0.2;
+user.actuator_delay.elevon_s = 0.0;
+user.actuator_delay.motor_tau_s = 0.0;
+user.actuator_delay.elevon_tau_s = 0.05;
 
 user.ic.enable_override = false;
 user.ic.mode = "stand_cache";
