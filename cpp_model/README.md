@@ -20,7 +20,7 @@ data/
 然后编译：
 
 ```cmd
-cd /d D:\D_zx\26WORK\ShengTai\0610ST_mini_controller\MODEL\cpp_model
+cd /d D:\D_zx\26WORK\ShengTai\0710HITL_ST\STaircraft\cpp_model
 if not exist build mkdir build
 cl /EHsc /O2 /std:c++17 /I. /Fo:build\ /Fe:build\validate_closedloop.exe aircraft.cpp validate_closedloop.cpp
 ```
@@ -60,7 +60,7 @@ zxGroundContactForce   对应地面接触力
 FixedWingController    固定翼控制律
 ```
 
-这些接口的目的是让 C++ 版本像 `GJ/model` 中的 MATLAB `.m` 文件一样，可以作为一个模型模块被外部控制律调用。
+这些接口的目的是让 C++ 版本像 `../matlab_model` 中的 MATLAB `.m` 文件一样，可以作为一个模型模块被外部控制律调用。当前在线 HITL 使用 MATLAB 版本；C++ 版本用于独立等价性和后续部署验证，不是 `HITL/run_*.m` 的运行依赖。
 
 ## 主旋翼功率平衡模型
 
@@ -89,6 +89,6 @@ data/aerodata1_tianshizhiyi_CFDslip.xlsx
 data/aerodata2_tianshizhiyi.xlsx
 ```
 
-当前 C++ 运行时不直接读取 `.xlsx`。气动数据已经从 `GJ/model/init_param_zx.m` 移植并内嵌在 `aircraft.cpp::initParamZx()` 中，这样 `MODEL/cpp_model` 不需要额外 Excel 解析库也能独立运行。
+当前 C++ 运行时不直接读取 `.xlsx`。气动数据已经从 `../matlab_model/init_param_zx.m` 移植并内嵌在 `aircraft.cpp::initParamZx()` 中，这样 `STaircraft/cpp_model` 不需要额外 Excel 解析库也能独立运行。
 
 其中 `CL/CD` 的全迎角数据不是简单夹紧表格，而是按 MATLAB 中相同的平板/失速后补全逻辑在 C++ 中生成。

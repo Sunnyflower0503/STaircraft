@@ -1,29 +1,31 @@
-# HITL adapter layer
+# STaircraft HITL 适配与自动验证
 
-This folder currently focuses on one target only:
+本目录把 `../matlab_model` 的 13 状态飞机模型接入 PX4。MATLAB 负责 HIL 状态、传感器、执行器接收、实时积分和 MAT 日志；Python 测试通过飞控 USB 负责模式、解锁、参数、人工控制和 Mission。
 
-`40 deg stand-static state -> HIL_STATE_QUATERNION` plus `SERVO_OUTPUT_RAW` receive on `COM4@115200`.
+## 当前范围与状态
 
-The plant model remains in `matlab_model/`. HITL code handles serial I/O, MAVLink encode/decode, state conversion, and stand-static communication tests.
+当前不再只是静态通信测试，已经覆盖：
 
-## Current Scope
+- 40° 支架、90° 机头朝上、平放和空中悬停初始姿态；
+- `HIL_SENSOR` 与 `HIL_STATE_QUATERNION` 发送、`SERVO_OUTPUT_RAW` 接收；
+- `force_enable` 冻结/释放模型和可配置电机、舵面传输延迟；
+- 旋翼 Stabilized 三轴扰动、定高和定点验证；
+- 固定翼支架跃升、Mission 外环、TECS 和航点跟踪；
+- 低速固定翼到旋翼转换；
+- 地面 Stabilized 解锁、闭合五边形、低空转换、旋翼慢速到点并连续定点 5 s 的自动流程。
 
-This stage tests:
+尚未完成的是旋翼触地、地面接触判定与自动上锁的完整着陆闭环。当前“定点通过”表示在空中目标点稳定保持，不表示已经验证触地。
 
-- 40 deg stand-static state generation
-- COM4@115200 serial communication
-- RX: MAVLink v2 `SERVO_OUTPUT_RAW`
-- TX: MAVLink v2 `HIL_STATE_QUATERNION`
-- QGC display of the aircraft near the configured initial geodetic position with stand attitude
+## 双 MAVLink 链路
 
-This stage does not test:
+最近一次验证使用以下分工，端口号可能变化：
 
-- takeoff
-- `force_enable=1`
-- full closed-loop control
-- ground taxi
-- airborne flight
-- throttle sweep
+| 链路 | 最近端口 | 所有者 | 用途 |
+| --- | --- | --- | --- |
+| TELEM2 | COM9 @ 115200 | MATLAB | TX `HIL_SENSOR`/`HIL_STATE_QUATERNION`，RX `SERVO_OUTPUT_RAW` |
+| 飞控 USB | COM5 | QGC 或 Python，二选一 | 模式、命令、参数、Mission、`MANUAL_CONTROL`、日志 |
+
+Commander 使用的人工控制位于飞控 USB MAVLink 实例。自动旋翼测试如果把 `MANUAL_CONTROL` 只发到 TELEM2，会出现控制输入丢失、failsafe/loiter 和动力下降。自动测试时关闭 QGC，让 Python 独占 USB；人工验证时由 QGC/遥控器承担 USB 控制，MATLAB仍独占 TELEM2。
 
 ## MAVLink Backend
 
@@ -83,9 +85,9 @@ or open `HITL/run_hitl_stand_static.m` in MATLAB and click Run.
 
 Run order:
 
-1. USB: connect Nora/PX4 to QGC.
-2. Serial: connect Nora/PX4 to MATLAB `COM4`.
-3. Make sure QGC does not occupy `COM4`.
+1. USB: connect Nora/PX4 to QGC for manual verification, or leave QGC closed for automated testing.
+2. Serial: connect Nora/PX4 TELEM2 to the MATLAB port configured in `user_hitl_config.m` (recently COM9).
+3. Make sure QGC does not occupy the TELEM2 port.
 4. Run `run_hitl_stand_static.m` in MATLAB.
 5. Wait for the aircraft to appear in QGC.
 6. Manually arm and move throttle/control sticks as needed.
@@ -141,7 +143,7 @@ HITL/logs/run_hitl_stand_takeoff_yyyymmdd_HHMMSS.mat
 Purpose:
 
 - validate that the 40 deg stand-static state can be generated or loaded from cache
-- validate that COM4@115200 can receive `SERVO_OUTPUT_RAW`
+- validate that the configured TELEM2 port at 115200 can receive `SERVO_OUTPUT_RAW`
 - validate that MATLAB continuously sends `HIL_STATE_QUATERNION`
 - validate that QGC shows the aircraft near `lat=34.021511`, `lon=108.757100`, `AMSL=500 m`
 - validate that the displayed attitude is the stand-static attitude, not airborne or takeoff motion
@@ -149,8 +151,8 @@ Purpose:
 Run order:
 
 1. Connect USB: Nora/PX4 -> QGC.
-2. Connect serial line: Nora/PX4 -> MATLAB `COM4`.
-3. Keep QGC on USB only. Do not let QGC occupy `COM4`.
+2. Connect serial line: Nora/PX4 TELEM2 -> MATLAB configured port (recently COM9).
+3. Keep QGC on USB only. Do not let QGC occupy the TELEM2 port.
 4. Run the no-hardware tests:
 
 ```matlab
@@ -238,6 +240,51 @@ run('D:/D_zx/26WORK/ShengTai/0710HITL_ST/STaircraft/HITL/run_hitl_airborne_nose_
 - Ground contact is disabled for this initial mode.
 - Use `force_enable=0` to hold a fixed hover display pose, or
   `force_enable=1` to let the model integrate from that initial state.
+
+## 人工旋翼验证顺序
+
+`Stabilized` 只选择飞行模式，不会替代 VTOL 模态切换。已验证的旋翼人工顺序：
+
+1. `runtime_control.txt` 保持 `force_enable=0`。
+2. 启动 `run_hitl_airborne_nose_up_hover_static.m`，确认 TELEM2 链路和初始状态。
+3. 在 QGC 中保持未解锁，明确执行切换到 Multi-Rotor。
+4. 确认 VTOL 状态为 Multi-Rotor，再选择 Stabilized。
+5. 解锁并将主桨建立到约 1650 PWM。
+6. 将 `force_enable=1`，观察姿态和位置响应。
+7. 结束时先 `force_enable=0`，再上锁。
+
+## 自动 Mission 验证
+
+自动流程需要两个同时运行的进程：MATLAB runner 独占 TELEM2，Python 测试独占飞控 USB。运行前关闭 QGC，并确认模型从全新的 MATLAB 进程启动，避免沿用上一次动力学状态。
+
+MATLAB：
+
+```matlab
+run('D:/D_zx/26WORK/ShengTai/0710HITL_ST/STaircraft/HITL/run_hitl_stand_takeoff.m')
+```
+
+已验证的闭合五边形流程：
+
+```powershell
+python -u "D:\D_zx\26WORK\ShengTai\0710HITL_ST\STaircraft\HITL\tests\run_mission_stand_takeoff.py" --port COM5 --duration 215 --pentagon-mission --takeoff-alt 45 --transition-alt 15 --takeoff-distance 220 --pentagon-center 550 --pentagon-radius 220 --pentagon-fw-acceptance 100 --descent-distance 800 --landing-distance 820 --approach-airspeed 11.5 --back-transition-airspeed 13.5 --back-transition-gate-time 0.5 --back-transition-throttle 0.40 --mc-waypoint-acceptance 10 --mc-speed 1.5
+```
+
+流程为 Fixed-Wing Stabilized 地面解锁 → Mission → `TD_FW_TKO_EN=1` → 固件两秒门控 → 跃升 → 五边形五条边 → 低空下降 → FW→MC → 1.5 m/s 到点 → 连续稳定 5 s。脚本的 `finally` 会冻结模型、强制上锁，并恢复 `TD_FW_TKO_EN=0`、`COM_RC_IN_MODE=0`；即使脚本异常退出，也必须人工复核这些状态。
+
+当前五边形采用 100 m 固定翼航点接受半径。30 m 在当前约 10° 滚转限制和约 18 m/s 空速下小于可实现转弯几何，任务会在顶点附近盘旋；这不应误判成姿态控制发散。
+
+## 安全复位
+
+每轮测试完成后必须确认：
+
+```text
+armed = false
+force_enable = 0
+TD_FW_TKO_EN = 0
+COM_RC_IN_MODE = 0
+MATLAB 循环停止或冻结
+QGC/Python 不再占用飞控 USB
+```
 
 ## User Model Switches / 用户模型开关
 
@@ -332,10 +379,13 @@ With `force_enable=0`, `hitl_main` freezes the prepared stand-static state and k
 
 ## Common Issues
 
-- `COM4` is occupied by QGroundControl or another program.
+- Configured TELEM2 port (recently COM9) is occupied by another program.
 - The PX4 serial baudrate is not `115200`.
 - PX4 is not outputting `SERVO_OUTPUT_RAW` on this MAVLink instance.
 - QGC/PX4 is displaying another GPS or positioning source instead of the HITL state.
 - MATLAB's Python environment does not have `pymavlink` installed.
-- `HIL_STATE_QUATERNION` may not be enough for some PX4 configurations; `HIL_GPS` may be needed later, but it is intentionally out of scope for this stage.
+- 如果 MATLAB 报 `py.pymavlink_bridge.MavlinkBridge` 不存在新方法，但 Python 文件中已经有该方法，说明 MATLAB 仍缓存旧 Python 类。停止 runner，执行 `clear classes`；必要时执行 `terminate(pyenv)` 后重新配置 `pyenv`，或直接重启 MATLAB，再重新运行。不要在活动串口循环中热重载 Python 类。
+- 自动测试出现 `manual control lost` 时，先确认 `MANUAL_CONTROL` 是否发送到飞控 USB 实例，而不是 TELEM2。
+- 模式看似是 Stabilized 但旋翼控制不工作时，先读取 VTOL 状态；必须明确处于 Multi-Rotor。
+- Mission 航点长时间不推进时，同时检查滚转限幅、空速、转弯半径和航点接受半径，不能只调姿态 PID。
 

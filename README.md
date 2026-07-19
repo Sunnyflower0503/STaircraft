@@ -1,6 +1,6 @@
-# MODEL
+# STaircraft 飞机模型与 HITL 工具
 
-`MODEL` 是一个独立交付目录，把同一套飞机动力学模型的 MATLAB 版本和 C++ 版本放在一起，方便其他智能体或开发者继续验证、接入控制律、编译和版本管理。
+`STaircraft` 是一个独立 Git 仓库，包含同一套飞机动力学模型的 MATLAB/C++ 版本，以及与 `PX4-WR-ST` 联调的 HITL 适配层和自动任务测试。
 
 本目录已经初始化为独立 git 仓库。
 
@@ -16,7 +16,7 @@ cpp_model/     复制自 D:\D_zx\26WORK\ShengTai\0610ST_mini_controller\GJ2\cpp
 ## 目录结构
 
 ```text
-MODEL/
+STaircraft/
   README.md
   VERIFICATION.md
   verify_matlab_model.m
@@ -53,6 +53,18 @@ MODEL/
 ```
 
 `cpp_model/build/` 是编译验证产生的目录，已被 `.gitignore` 忽略。
+
+## 当前 HITL 状态
+
+HITL 的完整运行说明见 [`HITL/README.md`](./HITL/README.md)。最近验证使用 TELEM2 串口 COM9@115200 作为模型数据链路，飞控 USB COM5 作为命令链路；端口号仅是最近一次枚举结果，应通过接口身份重新确认。
+
+当前已验证旋翼 Stabilized/定高/定点、固定翼 Mission 跃升与航迹控制、TECS、低速固定翼到旋翼转换，以及闭合五边形后旋翼到点定点。最新自动任务入口为：
+
+```powershell
+python HITL/tests/run_mission_stand_takeoff.py --port COM5 --pentagon-mission --duration 215
+```
+
+自动测试前应启动 `HITL/run_hitl_stand_takeoff.m`，并关闭占用飞控 USB 的 QGC。人工验证可保留 QGC 作为显示和操作界面。
 
 ## 模型接口
 
@@ -149,7 +161,7 @@ C++ 运行时不直接读取 `.xlsx`。气动数据已经按 `matlab_model/init_
 在 MATLAB 中运行：
 
 ```matlab
-run('D:\D_zx\26WORK\ShengTai\0610ST_mini_controller\MODEL\verify_matlab_model.m')
+run('D:\D_zx\26WORK\ShengTai\0710HITL_ST\STaircraft\verify_matlab_model.m')
 ```
 
 该脚本验证：
@@ -168,7 +180,7 @@ run('D:\D_zx\26WORK\ShengTai\0610ST_mini_controller\MODEL\verify_matlab_model.m'
 在 MATLAB 中运行：
 
 ```matlab
-run('D:\D_zx\26WORK\ShengTai\0610ST_mini_controller\MODEL\verify_propulsion_power_balance.m')
+run('D:\D_zx\26WORK\ShengTai\0710HITL_ST\STaircraft\verify_propulsion_power_balance.m')
 ```
 
 该脚本使用 `propulsion_data/ST建模.xlsx` 中的车载实测数据，比较旧油门-RPM 多项式和新功率平衡模型的 RPM 预测误差，并输出：
@@ -184,7 +196,7 @@ propulsion_power_balance_validation.csv
 先打开 Visual Studio 开发者 PowerShell，确保 `cl` 可用，然后运行：
 
 ```cmd
-cd /d D:\D_zx\26WORK\ShengTai\0610ST_mini_controller\MODEL\cpp_model
+cd /d D:\D_zx\26WORK\ShengTai\0710HITL_ST\STaircraft\cpp_model
 if not exist build mkdir build
 cl /EHsc /O2 /std:c++17 /I. /Fo:build\ /Fe:build\validate_closedloop.exe aircraft.cpp validate_closedloop.cpp
 build\validate_closedloop.exe build\cpp_closedloop.csv

@@ -1,4 +1,4 @@
-# GJ Aircraft Model MATLAB Copy
+# STaircraft MATLAB 飞机模型
 
 This directory contains a MATLAB implementation of the aircraft dynamics and
 force/moment model extracted from the Simulink model:
@@ -14,8 +14,12 @@ Tandem_zx_trans6/Aerocraft
 ```
 
 The code is intended as an experimental copy for fixed-wing high angle-of-attack
-takeoff, steep descent, and trajectory-planning verification. Prefer modifying
-this copy first instead of changing the original `ZX` model directly.
+takeoff, steep descent, transition, hover, and trajectory-planning verification.
+It is also the plant used by `../HITL`. Prefer modifying this copy first instead
+of changing the original `ZX` model directly, and rerun the repository-level
+model tests plus the relevant HITL regression after any dynamics change.
+
+当前在线半物理入口不在本目录直接运行，而在 `../HITL/run_*.m`。模型状态为 13 维，执行器输入为 12 维；HITL 层负责 PWM 映射、可配置执行机构延迟、MAVLink 编解码、实时积分和日志。
 
 ## Simulink Interface Mapping
 
@@ -219,7 +223,7 @@ Recommended fixed steps:
 ## Typical Usage
 
 ```matlab
-addpath('GJ/model');
+addpath('D:/D_zx/26WORK/ShengTai/0710HITL_ST/STaircraft/matlab_model');
 
 param = init_param_zx();
 
