@@ -121,7 +121,7 @@ class MavlinkBridge:
         self.encoder.send(msg, force_mavlink1=False)
         return self.output.bytes()
 
-    def encode_hil_sensor_and_state(self, sensor, state):
+    def encode_hil_sensor_and_state(self, sensor, state, rear_contact=False):
         sensor_msg = mavlink2.MAVLink_hil_sensor_message(
             int(sensor["time_usec"]),
             float(sensor["xacc"]), float(sensor["yacc"]), float(sensor["zacc"]),
@@ -144,6 +144,12 @@ class MavlinkBridge:
         self.output.clear()
         self.encoder.send(sensor_msg, force_mavlink1=False)
         self.encoder.send(state_msg, force_mavlink1=False)
+        contact_msg = self.encoder.named_value_float_encode(
+            int(state["time_usec"] // 1000),
+            b"TD_REAR",
+            1.0 if bool(rear_contact) else 0.0,
+        )
+        self.encoder.send(contact_msg, force_mavlink1=False)
         return self.output.bytes()
 
     def encode_manual_control(self, target, x, y, z, r, buttons=0):

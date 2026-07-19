@@ -1,5 +1,9 @@
-function bytes = pymavlink_encode_hil_bundle(sensor, state, cfg)
+function bytes = pymavlink_encode_hil_bundle(sensor, state, cfg, rear_contact)
 %PYMAVLINK_ENCODE_HIL_BUNDLE Encode sensor and state with one MAVLink sequence.
+
+if nargin < 4
+    rear_contact = false;
+end
 
 persistent bridge
 if isempty(bridge)
@@ -30,7 +34,7 @@ for name = state_int_names
     py_state{char(name)} = py.int(state.(name));
 end
 
-py_bytes = bridge.encode_hil_sensor_and_state(py_sensor, py_state);
+py_bytes = bridge.encode_hil_sensor_and_state(py_sensor, py_state, py.bool(logical(rear_contact)));
 bytes = uint8(py.array.array("B", py_bytes));
 bytes = bytes(:);
 end

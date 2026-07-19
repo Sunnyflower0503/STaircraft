@@ -74,6 +74,8 @@ stats.log_file = create_log_file(hitl_dir);
 fprintf("[HITL TAKEOFF] Log autosave file: %s\n", stats.log_file);
 fprintf("[HITL TAKEOFF] Actuator delays: motors=%.3f s, elevons=%.3f s.\n", ...
     cfg.actuator_delay.motor_s, cfg.actuator_delay.elevon_s);
+fprintf("[HITL TAKEOFF] Actuator first-order tau: motors=%.3f s, elevons=%.3f s.\n", ...
+    cfg.actuator_delay.motor_tau_s, cfg.actuator_delay.elevon_tau_s);
 save_stats_snapshot(stats, "[HITL TAKEOFF] Created initial log");
 state = initial_stand_takeoff_state();
 history = init_history();
@@ -90,6 +92,7 @@ flight_wall_time_s = 0;
 first_servo_reported = false;
 no_servo_warning_printed = false;
 stop_after_landing = false;
+landing_confirmed_wall_s = NaN;
 ser = [];
 runtime = containers.Map("KeyType", "char", "ValueType", "any");
 runtime("stats") = stats;
@@ -182,14 +185,19 @@ while ~stop_after_landing
     if state.just_landing_confirmed
         fprintf("[HITL] Landing confirmed: active_contact_count=%d/6 at t=%.3f\n", ...
             contact_diag.active_contact_count, plant_time_s);
-        fprintf("[HITL] Simulation stopped after landing.\n");
+        fprintf("[HITL] Holding the ground model for 2 s to verify rear-contact protection.\n");
+        landing_confirmed_wall_s = wall_time_s;
+    end
+    if isfinite(landing_confirmed_wall_s) && wall_time_s - landing_confirmed_wall_s >= 2.0
+        fprintf("[HITL] Simulation stopped after the post-landing protection window.\n");
         stop_after_landing = true;
     end
 
     uav = state_to_uavdata_like(wall_time_s, x, u, param, cfg);
     payload = uavdata_to_hil_state_quaternion_payload(uav, cfg);
     sensor_payload = uavdata_to_hil_sensor_payload(uav, cfg);
-    tx_bytes = mavlink_encode_hil_bundle(sensor_payload, payload, cfg);
+    rear_contact = numel(contact_diag.active) >= 6 && all(contact_diag.active(4:6));
+    tx_bytes = mavlink_encode_hil_bundle(sensor_payload, payload, cfg, rear_contact);
     serial_write_bytes(ser, tx_bytes);
 
     stats.tx_bytes_total = stats.tx_bytes_total + numel(tx_bytes);
