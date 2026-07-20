@@ -8,8 +8,20 @@ cfg.stand.release_hold_s = 0.1;
 cfg.landing.liftoff_confirm_s = 0.05;
 cfg.landing.min_active_contacts = 5;
 cfg.landing.confirm_s = 0.1;
+cfg.model.force_enable = 1;
 
 dt = 0.01;
+
+cfg_frozen = cfg;
+cfg_frozen.model.force_enable = 0;
+state = initial_stand_takeoff_state();
+for k = 1:20
+    state = stand_takeoff_state_step(state, 1.0, 6, dt, cfg_frozen);
+end
+assert(~state.stand_released, ...
+    "force_enable=0 must prevent stand release even at full throttle.");
+assert(state.release_timer_s == 0, ...
+    "Frozen mode must not accumulate stand-release time.");
 
 state = initial_stand_takeoff_state();
 for k = 1:20
@@ -61,6 +73,13 @@ for k = 1:20
     state = stand_takeoff_state_step(state, 0.0, 4, dt, cfg);
 end
 assert(state.phase == "FLIGHT", "4/6 contacts after liftoff should not count as landed.");
+
+state = make_liftoff_state(cfg, dt);
+for k = 1:10
+    state = stand_takeoff_state_step(state, 0.0, 3, dt, cfg, true);
+end
+assert(state.phase == "LANDED", ...
+    "Three continuously gentle rear contacts should confirm tailsitter landing.");
 
 state = make_liftoff_state(cfg, dt);
 for k = 1:10

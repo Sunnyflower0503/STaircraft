@@ -110,6 +110,10 @@ manual_pulse = pymavlink_encode_manual_control(1, manual_xy_milli(1), manual_xy_
 manual_takeoff = pymavlink_encode_manual_control(1, 0, 0, 700, 0, 0, cfg);
 cmd_transition_mc = pymavlink_encode_command_long(1, 0, 3000, [3 0 0 0 0 0 0], cfg);
 mode_number = struct("stabilized", 7, "altitude", 2, "position", 3);
+initial_mode_number = mode_number.(flight_mode);
+if flight_mode == "position"
+    initial_mode_number = mode_number.altitude;
+end
 cmd_control_mode = pymavlink_encode_command_long(1, 0, 176, ...
     [81 mode_number.(flight_mode) 0 0 0 0 0], cfg);
 cmd_altitude_mode = pymavlink_encode_command_long(1, 0, 176, [81 2 0 0 0 0 0], cfg);
@@ -132,10 +136,18 @@ aborted = false;
 abort_reason = "";
 diagnostic_events = strings(0, 1);
 transition_sent = false;
+transition_confirmed = false;
 control_mode_sent = false;
+control_mode_confirmed = false;
 position_mode_sent = false;
+position_mode_confirmed = false;
 last_arm_attempt_s = -inf;
+last_transition_attempt_s = -inf;
+last_control_mode_attempt_s = -inf;
 last_gcs_heartbeat_s = -inf;
+latest_vtol_state = 0;
+latest_main_mode = 0;
+latest_armed = false;
 
 fprintf("[NATIVE DIST] COM9 native MATLAB loop started. mode=%s Target dt=%.3f s, throttle=%d/1000, yaw r=%d/1000, pulse=%.2f s, Mext=[%+.3f %+.3f %+.3f] Nm Fned=[%+.2f %+.2f %+.2f] N\n", ...
     flight_mode, cfg.sample_time, throttle_milli, yaw_pulse_milli, pulse_duration_s, ...
@@ -170,15 +182,40 @@ while true
         diagnostic_events(end + 1, 1) = event; %#ok<AGROW>
         fprintf("[NATIVE DIST] %s\n", event);
     end
+    if diagnostics.extended_sys_state_new
+        latest_vtol_state = diagnostics.vtol_state;
+        transition_confirmed = latest_vtol_state == 3;
+        event = sprintf("wall=%.2f EXTENDED_SYS_STATE vtol=%d landed=%d", ...
+            wall_t, diagnostics.vtol_state, diagnostics.landed_state);
+        diagnostic_events(end + 1, 1) = event; %#ok<AGROW>
+        fprintf("[NATIVE DIST] %s\n", event);
+    end
+    if diagnostics.heartbeat_new
+        latest_main_mode = double(bitand(bitshift(uint32(diagnostics.custom_mode), -16), uint32(255)));
+        latest_armed = diagnostics.armed;
+        if flight_mode == "position" && position_mode_sent
+            position_mode_confirmed = latest_main_mode == mode_number.position;
+        elseif control_mode_sent
+            control_mode_confirmed = latest_main_mode == initial_mode_number;
+        end
+    end
     if servo_msg.is_new
         u = actuator_from_servo_output_raw(servo_msg, u, cfg);
         last_servo = [servo_msg.servo1_raw servo_msg.servo2_raw servo_msg.servo3_raw servo_msg.servo4_raw ...
                       servo_msg.servo5_raw servo_msg.servo6_raw servo_msg.servo7_raw servo_msg.servo8_raw];
     end
 
-    if wall_t >= plant_release_s + 0.8 && (all(isnan(last_servo)) || max(last_servo(1:4)) < 1000)
+    if wall_t >= transition_s + 5.0 && ~transition_confirmed
         aborted = true;
-        abort_reason = "arming/output confirmation failed";
+        abort_reason = sprintf("MC transition confirmation timed out, latest vtol=%d", latest_vtol_state);
+        break;
+    elseif wall_t >= control_mode_s + 5.0 && (~control_mode_sent || ~control_mode_confirmed)
+        aborted = true;
+        abort_reason = sprintf("mode confirmation timed out, latest main_mode=%d", latest_main_mode);
+        break;
+    elseif wall_t >= plant_release_s + 0.8 && (~latest_armed || all(isnan(last_servo)) || max(last_servo(1:4)) < 1000)
+        aborted = true;
+        abort_reason = sprintf("arming/output confirmation failed, armed=%d servo_max=%.0f", latest_armed, max(last_servo(1:4)));
         break;
     end
 
@@ -207,8 +244,7 @@ while true
 
     uav = state_to_uavdata_like(wall_t, x, u, param, cfg);
     payload = uavdata_to_hil_state_quaternion_payload(uav, cfg);
-    sensor_payload = uavdata_to_hil_sensor_payload(uav, cfg);
-    serial_write_bytes(ser, mavlink_encode_hil_bundle(sensor_payload, payload, cfg));
+    serial_write_bytes(ser, mavlink_encode_hil_state_quaternion(payload, cfg));
 
     if wall_t < spool_start_s
         serial_write_bytes(command_ser, manual_low);
@@ -223,10 +259,12 @@ while true
         serial_write_bytes(command_ser, manual_pulse);
     end
 
-    if wall_t >= transition_s && ~transition_sent
+    if wall_t >= transition_s && ~transition_confirmed && wall_t - last_transition_attempt_s >= 0.5
         serial_write_bytes(command_ser, cmd_transition_mc);
         transition_sent = true;
-    elseif wall_t >= control_mode_s && ~control_mode_sent
+        last_transition_attempt_s = wall_t;
+    elseif wall_t >= control_mode_s && transition_confirmed && ~control_mode_confirmed ...
+            && wall_t - last_control_mode_attempt_s >= 0.5
         if flight_mode == "position"
             % Horizontal position is not valid early enough for POSCTL.
             % Enter ALTCTL for arming/takeoff and switch after HIL aiding is valid.
@@ -235,16 +273,20 @@ while true
             serial_write_bytes(command_ser, cmd_control_mode);
         end
         control_mode_sent = true;
-    elseif wall_t >= arm_start_s && wall_t < plant_release_s + 1.6 ...
+        last_control_mode_attempt_s = wall_t;
+    elseif wall_t >= arm_start_s && transition_confirmed && control_mode_confirmed ...
+            && wall_t < plant_release_s + 1.6 ...
             && (all(isnan(last_servo)) || max(last_servo(1:4)) < 1000) ...
             && wall_t - last_arm_attempt_s >= 0.7
         serial_write_bytes(command_ser, cmd_arm);
         last_arm_attempt_s = wall_t;
     end
 
-    if flight_mode == "position" && wall_t >= position_mode_s && ~position_mode_sent
+    if flight_mode == "position" && wall_t >= position_mode_s && ~position_mode_confirmed ...
+            && wall_t - last_control_mode_attempt_s >= 0.5
         serial_write_bytes(command_ser, cmd_control_mode);
         position_mode_sent = true;
+        last_control_mode_attempt_s = wall_t;
     end
 
     attitude_error_deg = quaternion_distance_deg(x(7:10), q_initial);

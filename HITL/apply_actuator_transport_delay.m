@@ -31,7 +31,10 @@ u_target(11:12) = command_at(time_s - cfg.actuator_delay.elevon_s, state, 11:12)
 dt_s = max(0, time_s - state.filter_time_s);
 motor_tau_s = optional_delay_field(cfg.actuator_delay, "motor_tau_s", 0);
 elevon_tau_s = optional_delay_field(cfg.actuator_delay, "elevon_tau_s", 0);
-state.filtered_u(1:10) = first_order_step(state.filtered_u(1:10), u_target(1:10), dt_s, motor_tau_s);
+state.filtered_u(1:8) = collective_motor_step( ...
+    state.filtered_u(1:8), u_target(1:8), dt_s, motor_tau_s);
+state.filtered_u(9:10) = collective_motor_step( ...
+    state.filtered_u(9:10), u_target(9:10), dt_s, motor_tau_s);
 state.filtered_u(11:12) = first_order_step(state.filtered_u(11:12), u_target(11:12), dt_s, elevon_tau_s);
 state.filter_time_s = time_s;
 u_delayed = state.filtered_u;
@@ -43,6 +46,22 @@ if isempty(keep_from)
 end
 state.time_s = state.time_s(keep_from:end);
 state.u = state.u(:, keep_from:end);
+end
+
+function value = collective_motor_step(previous, target, dt_s, tau_s)
+% Filter only collective thrust. Preserve instantaneous differential control.
+if tau_s <= 0 || dt_s <= 0
+    if tau_s <= 0
+        value = target;
+    else
+        value = previous;
+    end
+    return;
+end
+target_collective = mean(target);
+previous_collective = mean(previous);
+filtered_collective = first_order_step(previous_collective, target_collective, dt_s, tau_s);
+value = min(max(target + filtered_collective - target_collective, 0), 1);
 end
 
 function value = first_order_step(previous, target, dt_s, tau_s)

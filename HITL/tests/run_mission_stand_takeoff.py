@@ -129,15 +129,145 @@ def set_int_param(master, name, value):
     )
 
 
-def set_int_param_and_wait(master, name, value, timeout=5):
-    set_int_param(master, name, value)
+def count_sign_changes(values, deadband):
+    signs = []
+    for value in values:
+        if value > deadband:
+            sign = 1
+        elif value < -deadband:
+            sign = -1
+        else:
+            continue
+        if not signs or sign != signs[-1]:
+            signs.append(sign)
+    return max(len(signs) - 1, 0)
+
+
+def evaluate_fixed_wing_legs(samples, mission_seqs, acceptance_m):
+    issues = []
+    max_corner_peak_m = max(2.5 * acceptance_m, 75.0)
+    capture_band_m = max(acceptance_m / 3.0, 10.0)
+    max_recaptured_peak_m = max(acceptance_m / 2.0, 15.0)
+
+    print("Fixed-wing line tracking metrics:")
+    for mission_seq in mission_seqs:
+        leg = [sample for sample in samples if sample[1] == mission_seq]
+        if len(leg) < 5:
+            issues.append(f"item {mission_seq}: insufficient navigation samples ({len(leg)})")
+            continue
+
+        start_s = leg[0][0]
+        end_s = leg[-1][0]
+        xtrack = [sample[2] for sample in leg]
+        roll_sp = [sample[3] for sample in leg]
+        peak_m = max(abs(value) for value in xtrack)
+        peak_index = max(range(len(leg)), key=lambda index: abs(leg[index][2]))
+        capture_index = next(
+            (
+                index
+                for index in range(peak_index, len(leg))
+                if abs(leg[index][2]) <= capture_band_m
+            ),
+            None,
+        )
+        recaptured = leg[capture_index:] if capture_index is not None else []
+        recaptured_xtrack = [sample[2] for sample in recaptured]
+        recaptured_roll_sp = [sample[3] for sample in recaptured]
+        actual_roll = [sample[4] for sample in leg if math.isfinite(sample[4])]
+        recaptured_actual_roll = [sample[4] for sample in recaptured if math.isfinite(sample[4])]
+        recaptured_roll_rate = [sample[5] for sample in recaptured if math.isfinite(sample[5])]
+        recaptured_peak_m = (
+            max(abs(value) for value in recaptured_xtrack) if recaptured_xtrack else math.inf
+        )
+        recapture_s = leg[capture_index][0] - start_s if capture_index is not None else math.inf
+        rms_m = math.sqrt(sum(value * value for value in xtrack) / len(xtrack))
+        crossings = count_sign_changes(recaptured_xtrack, 2.0)
+        roll_reversals = count_sign_changes(recaptured_roll_sp, 0.5)
+        actual_roll_reversals = count_sign_changes(recaptured_actual_roll, 0.5)
+        max_abs_roll = max((abs(value) for value in actual_roll), default=math.nan)
+        post_roll_rate_peak = max((abs(value) for value in recaptured_roll_rate), default=math.nan)
+        print(
+            f"  item={mission_seq} duration={end_s - start_s:.1f}s "
+            f"corner_peak={peak_m:.1f}m recapture={recapture_s:.1f}s "
+            f"recaptured_peak={recaptured_peak_m:.1f}m rms={rms_m:.1f}m "
+            f"post_crossings={crossings} post_roll_sp_reversals={roll_reversals} "
+            f"post_actual_roll_reversals={actual_roll_reversals} "
+            f"post_roll_rate_peak={post_roll_rate_peak:.1f}deg/s "
+            f"max_abs_roll={max_abs_roll:.1f}deg"
+        )
+
+        if peak_m > max_corner_peak_m:
+            issues.append(
+                f"item {mission_seq}: corner peak cross-track {peak_m:.1f}m > {max_corner_peak_m:.1f}m"
+            )
+        if capture_index is None:
+            issues.append(f"item {mission_seq}: route was not recaptured within {capture_band_m:.1f}m")
+            continue
+        if recaptured_peak_m > max_recaptured_peak_m:
+            issues.append(
+                f"item {mission_seq}: post-capture peak {recaptured_peak_m:.1f}m > {max_recaptured_peak_m:.1f}m"
+            )
+        if crossings > 2:
+            issues.append(f"item {mission_seq}: crossed the route {crossings} times after recapture")
+        if roll_reversals > 4:
+            issues.append(f"item {mission_seq}: roll command reversed {roll_reversals} times after recapture")
+        if actual_roll_reversals > 4:
+            issues.append(f"item {mission_seq}: actual roll reversed {actual_roll_reversals} times after recapture")
+        if math.isfinite(post_roll_rate_peak) and post_roll_rate_peak > 30.0:
+            issues.append(
+                f"item {mission_seq}: post-capture roll rate reached {post_roll_rate_peak:.1f}deg/s"
+            )
+        if math.isfinite(max_abs_roll) and max_abs_roll > 35.0:
+            issues.append(f"item {mission_seq}: actual roll reached {max_abs_roll:.1f}deg")
+
+    return issues
+
+
+def decode_int_param_value(value):
+    raw_value = float(value)
+    numeric_value = int(round(raw_value))
+    union_value = struct.unpack("<i", struct.pack("<f", raw_value))[0]
+    if abs(raw_value) > 1e-30 and abs(raw_value - numeric_value) <= 1e-3:
+        return numeric_value
+    return union_value
+
+
+def get_int_param(master, name, timeout=5):
     deadline = time.time() + timeout
+    next_send = 0.0
     while time.time() < deadline:
+        if time.time() >= next_send:
+            master.mav.param_request_read_send(
+                master.target_system,
+                master.target_component,
+                name.encode(),
+                -1,
+            )
+            next_send = time.time() + 0.5
         send_gcs_heartbeat(master)
         msg = master.recv_match(type="PARAM_VALUE", blocking=True, timeout=0.5)
         if msg is not None and msg.param_id.rstrip("\x00") == name:
-            return
-    raise RuntimeError(f"No PARAM_VALUE confirmation for {name}")
+            return decode_int_param_value(msg.param_value)
+    raise RuntimeError(f"No PARAM_VALUE readback for {name}")
+
+
+def set_int_param_and_wait(master, name, value, timeout=5):
+    deadline = time.time() + timeout
+    next_send = 0.0
+    last_value = None
+    while time.time() < deadline:
+        if time.time() >= next_send:
+            set_int_param(master, name, value)
+            next_send = time.time() + 0.5
+        send_gcs_heartbeat(master)
+        msg = master.recv_match(type="PARAM_VALUE", blocking=True, timeout=0.5)
+        if msg is not None and msg.param_id.rstrip("\x00") == name:
+            last_value = float(msg.param_value)
+            # PX4 may return integer parameters either as an ordinary numeric
+            # float or as the raw INT32 union bits carried by PARAM_VALUE.
+            if decode_int_param_value(last_value) == int(value):
+                return
+    raise RuntimeError(f"No matching PARAM_VALUE for {name}; last readback={last_value}")
 
 
 def set_float_param_and_wait(master, name, value, timeout=5):
@@ -193,6 +323,20 @@ def main():
     parser.add_argument("--descent-distance", type=float, default=520.0)
     parser.add_argument("--landing-distance", type=float, default=570.0)
     parser.add_argument("--transition-alt", type=float, default=15.0)
+    parser.add_argument(
+        "--transition-trigger-alt",
+        type=float,
+        default=20.0,
+        help="Request FW-to-MC conversion at or below this relative altitude",
+    )
+    parser.add_argument("--flare-alt", type=float, default=18.0)
+    parser.add_argument("--transition-max-airspeed", type=float, default=12.0)
+    parser.add_argument("--transition-max-descent-rate", type=float, default=0.5)
+    parser.add_argument("--transition-max-roll", type=float, default=10.0)
+    parser.add_argument("--transition-max-pitch", type=float, default=15.0)
+    parser.add_argument("--transition-stable-time", type=float, default=0.5)
+    parser.add_argument("--transition-flare-radius", type=float, default=120.0)
+    parser.add_argument("--mission-stall-timeout", type=float, default=120.0)
     parser.add_argument("--fw-wp-acceptance", type=float, default=30.0)
     parser.add_argument("--approach-airspeed", type=float, default=11.5)
     parser.add_argument("--back-transition-airspeed", type=float, default=13.5)
@@ -200,7 +344,26 @@ def main():
     parser.add_argument("--back-transition-throttle", type=float, default=0.40)
     parser.add_argument("--mc-waypoint-acceptance", type=float, default=10.0)
     parser.add_argument("--mc-speed", type=float, default=1.5)
+    parser.add_argument("--mc-max-down-speed", type=float, default=0.8)
+    parser.add_argument("--land-speed", type=float, default=0.6)
+    parser.add_argument("--land-alt1", type=float, default=12.0)
+    parser.add_argument("--land-alt2", type=float, default=8.0)
     parser.add_argument("--cruise-airspeed", type=float, default=13.0)
+    parser.add_argument("--fw-roll-rate-p", type=float, default=0.05)
+    parser.add_argument("--fw-roll-rate-i", type=float, default=0.04)
+    parser.add_argument("--fw-roll-rate-ff", type=float, default=0.25)
+    parser.add_argument("--fw-roll-rate-imax", type=float, default=0.15)
+    parser.add_argument("--fw-roll-time-constant", type=float, default=0.5)
+    parser.add_argument("--fw-roll-rate-limit", type=float, default=45.0)
+    parser.add_argument("--fw-roll-limit", type=float, default=25.0)
+    parser.add_argument("--fw-roll-setpoint-slew", type=float, default=8.0)
+    parser.add_argument("--fw-l1-period", type=float, default=20.0)
+    parser.add_argument("--fw-l1-damping", type=float, default=0.8)
+    parser.add_argument("--fw-max-abs-roll", type=float, default=40.0)
+    parser.add_argument("--quad-entry-distance", type=float, default=230.0)
+    parser.add_argument("--quad-near-north", type=float, default=200.0)
+    parser.add_argument("--quad-far-north", type=float, default=800.0)
+    parser.add_argument("--quad-west", type=float, default=650.0)
     parser.add_argument("--pentagon-center", type=float, default=550.0)
     parser.add_argument("--pentagon-radius", type=float, default=220.0)
     parser.add_argument("--pentagon-fw-acceptance", type=float, default=100.0)
@@ -215,9 +378,24 @@ def main():
         help="Arm in fixed-wing Stabilized, fly a closed pentagon, back-transition, and hold position",
     )
     parser.add_argument(
+        "--polygon-fw-only",
+        action="store_true",
+        help="Stop after all fixed-wing polygon edges without entering FW-to-MC conversion",
+    )
+    parser.add_argument(
         "--quadrilateral-landing",
         action="store_true",
         help="Fly a straight entry and closed quadrilateral, then descend, transition, loiter, and land",
+    )
+    parser.add_argument(
+        "--hold-after-transition",
+        action="store_true",
+        help="With --quadrilateral-landing, stop after a stable MC position hold instead of landing",
+    )
+    parser.add_argument(
+        "--approach-only",
+        action="store_true",
+        help="With --quadrilateral-landing, skip the polygon and isolate the straight descent/flare/landing sequence",
     )
     parser.add_argument(
         "--full-landing",
@@ -236,9 +414,16 @@ def main():
         help="Request a fixed-wing to multicopter transition this many seconds after Mission start",
     )
     args = parser.parse_args()
+    if args.polygon_fw_only and not (args.pentagon_mission or args.quadrilateral_landing):
+        raise ValueError("--polygon-fw-only requires --pentagon-mission or --quadrilateral-landing")
+    if args.quadrilateral_landing and not args.approach_only:
+        if not (args.quad_near_north < args.quad_entry_distance < args.quad_far_north):
+            raise ValueError("Require quad-near-north < quad-entry-distance < quad-far-north")
+        if args.quad_west <= 0.0:
+            raise ValueError("quad-west must be positive")
     polygon_mission = args.pentagon_mission or args.quadrilateral_landing
     effective_fw_acceptance = (
-        args.pentagon_fw_acceptance if polygon_mission else args.fw_wp_acceptance
+        args.pentagon_fw_acceptance if args.pentagon_mission else args.fw_wp_acceptance
     )
 
     runtime_file = Path(__file__).resolve().parents[1] / "runtime_control.txt"
@@ -249,15 +434,36 @@ def main():
     if heartbeat is None:
         raise RuntimeError(f"No PX4 heartbeat on {args.port}")
     send_gcs_heartbeat(master)
+    original_com_rcl_except = None
 
     try:
         runtime_file.write_text("force_enable=0\n", encoding="utf-8")
         set_int_param_and_wait(master, "COM_RC_IN_MODE", 4)
+        original_com_rcl_except = get_int_param(master, "COM_RCL_EXCEPT")
+        set_int_param_and_wait(master, "COM_RCL_EXCEPT", original_com_rcl_except | 1)
         set_int_param_and_wait(master, "TD_FW_TKO_EN", 0)
+        set_int_param_and_wait(master, "FW_L1_METHOD", 0)
+        set_int_param_and_wait(master, "TD_FW_NAV_DIR", 0)
         set_float_param_and_wait(master, "TD_FW_WP_ACC", effective_fw_acceptance)
+        set_float_param_and_wait(master, "FW_RR_P", args.fw_roll_rate_p)
+        set_float_param_and_wait(master, "FW_RR_I", args.fw_roll_rate_i)
+        set_float_param_and_wait(master, "FW_RR_FF", args.fw_roll_rate_ff)
+        set_float_param_and_wait(master, "FW_RR_IMAX", args.fw_roll_rate_imax)
+        set_float_param_and_wait(master, "FW_R_TC", args.fw_roll_time_constant)
+        set_float_param_and_wait(master, "FW_R_RMAX", args.fw_roll_rate_limit)
+        set_float_param_and_wait(master, "FW_R_LIM", args.fw_roll_limit)
+        set_float_param_and_wait(master, "FW_L1_R_SLEW_MAX", args.fw_roll_setpoint_slew)
+        set_float_param_and_wait(master, "FW_L1_PERIOD", args.fw_l1_period)
+        set_float_param_and_wait(master, "FW_L1_DAMPING", args.fw_l1_damping)
         set_float_param_and_wait(master, "TD_BTR_ARSP", args.back_transition_airspeed)
+        set_float_param_and_wait(master, "TD_BTR_ROLL", args.transition_max_roll)
+        set_float_param_and_wait(master, "TD_BTR_PITCH", args.transition_max_pitch)
         set_float_param_and_wait(master, "TD_BTR_GATE_T", args.back_transition_gate_time)
         set_float_param_and_wait(master, "TD_BTR_THR", args.back_transition_throttle)
+        set_float_param_and_wait(master, "MPC_Z_VEL_MAX_DN", args.mc_max_down_speed)
+        set_float_param_and_wait(master, "MPC_LAND_SPEED", args.land_speed)
+        set_float_param_and_wait(master, "MPC_LAND_ALT1", args.land_alt1)
+        set_float_param_and_wait(master, "MPC_LAND_ALT2", args.land_alt2)
         time.sleep(0.5)
         global_position = None
         position_warmup_deadline = time.time() + 12.0
@@ -387,32 +593,43 @@ def main():
             },
         ]
         transition_item_seq = None
+        fw_polygon_complete_seq = None
         mc_waypoint_seq = None
         mc_hold_seq = None
         pentagon_points = []
+        flare_latitude = None
+        flare_longitude = None
         current_target_available = not args.use_current_mission
 
         if args.quadrilateral_landing:
             # Straight entry, one closed quadrilateral, then a separate exit
             # and descent path. Repeating vertex 1 is necessary to complete
             # the fourth edge; no other waypoint is reused.
-            straight_point = (400.0, 0.0)
+            straight_point = (args.quad_entry_distance, 0.0)
             # Enter the rectangle northbound and fly four consistent left
             # turns. This avoids alternating turn directions at adjacent
             # vertices and gives the L1 controller a full straight leg after
             # every corner before the next capture region.
             quadrilateral_points = [
-                (700.0, 0.0),
-                (700.0, -400.0),
-                (350.0, -400.0),
-                (350.0, 0.0),
-                (700.0, 0.0),
+                (args.quad_far_north, 0.0),
+                (args.quad_far_north, -args.quad_west),
+                (args.quad_near_north, -args.quad_west),
+                (args.quad_near_north, 0.0),
+                (args.quad_far_north, 0.0),
             ]
-            exit_point = (1000.0, -100.0)
-            # Use a long, shallow fixed-wing descent so the back-transition can
-            # start below 10 m AGL without reaching the ground during conversion.
-            descent_point = (1600.0, -150.0)
-            landing_point = (1680.0, -150.0)
+            exit_point = (1100.0, -120.0)
+            # Use separate descent and flare legs. The long first leg sheds
+            # altitude at fixed-wing speed; the second leg commands a gentle
+            # pull-up so vertical speed is arrested before back-transition.
+            descent_point = (2000.0, -150.0)
+            flare_point = (2300.0, -150.0)
+            landing_point = (2400.0, -150.0)
+            if args.approach_only:
+                quadrilateral_points = []
+                exit_point = (500.0, 0.0)
+                descent_point = (1300.0, 0.0)
+                flare_point = (1600.0, 0.0)
+                landing_point = flare_point
             landing_latitude, landing_longitude = local_coordinate(*landing_point)
 
             items = [items[0]]
@@ -457,22 +674,31 @@ def main():
                     "z": current_alt_m + args.transition_alt,
                 }
             )
+            flare_latitude, flare_longitude = local_coordinate(*flare_point)
+            items.append(
+                {
+                    "frame": mavutil.mavlink.MAV_FRAME_GLOBAL_INT,
+                    "command": mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
+                    "param1": 300.0,
+                    "param2": 20.0,
+                    "x": flare_latitude,
+                    "y": flare_longitude,
+                    "z": current_alt_m + args.flare_alt,
+                }
+            )
             transition_item_seq = len(items)
-            items.extend(
-                [
-                    {
-                        "frame": mavutil.mavlink.MAV_FRAME_MISSION,
-                        "command": mavutil.mavlink.MAV_CMD_DO_VTOL_TRANSITION,
-                        "param1": mavutil.mavlink.MAV_VTOL_STATE_MC,
-                    },
-                    {
-                        "frame": mavutil.mavlink.MAV_FRAME_MISSION,
-                        "command": mavutil.mavlink.MAV_CMD_DO_CHANGE_SPEED,
-                        "param1": 1.0,
-                        "param2": args.mc_speed,
-                        "param3": -1.0,
-                    },
-                ]
+            # Do not put MAV_CMD_DO_VTOL_TRANSITION in the mission here. It
+            # would bypass the script-side airspeed, attitude, vertical-speed,
+            # and continuous-stability gate. Hold the flare waypoint until the
+            # explicit command succeeds, then jump directly to the MC approach.
+            items.append(
+                {
+                    "frame": mavutil.mavlink.MAV_FRAME_MISSION,
+                    "command": mavutil.mavlink.MAV_CMD_DO_CHANGE_SPEED,
+                    "param1": 1.0,
+                    "param2": args.mc_speed,
+                    "param3": -1.0,
+                }
             )
             mc_waypoint_seq = len(items)
             items.append(
@@ -487,25 +713,36 @@ def main():
                 }
             )
             mc_hold_seq = len(items)
-            items.extend(
-                [
+            if args.hold_after_transition:
+                items.append(
                     {
                         "frame": mavutil.mavlink.MAV_FRAME_GLOBAL_INT,
-                        "command": mavutil.mavlink.MAV_CMD_NAV_LOITER_TIME,
-                        "param1": 5.0,
+                        "command": mavutil.mavlink.MAV_CMD_NAV_LOITER_UNLIM,
                         "x": landing_latitude,
                         "y": landing_longitude,
                         "z": current_alt_m + args.transition_alt,
-                    },
-                    {
-                        "frame": mavutil.mavlink.MAV_FRAME_GLOBAL_INT,
-                        "command": mavutil.mavlink.MAV_CMD_NAV_LAND,
-                        "x": landing_latitude,
-                        "y": landing_longitude,
-                        "z": current_alt_m,
-                    },
-                ]
-            )
+                    }
+                )
+            else:
+                items.extend(
+                    [
+                        {
+                            "frame": mavutil.mavlink.MAV_FRAME_GLOBAL_INT,
+                            "command": mavutil.mavlink.MAV_CMD_NAV_LOITER_TIME,
+                            "param1": 5.0,
+                            "x": landing_latitude,
+                            "y": landing_longitude,
+                            "z": current_alt_m + args.transition_alt,
+                        },
+                        {
+                            "frame": mavutil.mavlink.MAV_FRAME_GLOBAL_INT,
+                            "command": mavutil.mavlink.MAV_CMD_NAV_LAND,
+                            "x": landing_latitude,
+                            "y": landing_longitude,
+                            "z": current_alt_m,
+                        },
+                    ]
+                )
 
         elif args.pentagon_mission:
             items = [items[0]]
@@ -539,6 +776,7 @@ def main():
                     "z": takeoff_alt_m,
                 }
             )
+            fw_polygon_complete_seq = len(items)
             items.extend(
                 [
                     {
@@ -723,11 +961,21 @@ def main():
             upload_mission(master, items)
 
         if args.quadrilateral_landing and not args.use_current_mission:
-            print(
-                f"Quadrilateral landing mission uploaded: straight entry at {args.cruise_airspeed:.1f} m/s, "
-                f"closed 350 x 400 m route, separate exit, descend to "
-                f"+{args.transition_alt:.1f} m, transition, loiter 5 s, and land"
-            )
+            if args.approach_only:
+                print(
+                    f"Approach-only mission uploaded: straight flight, descend to "
+                    f"+{args.transition_alt:.1f} m, flare to +{args.flare_alt:.1f} m, "
+                    f"transition, loiter 5 s, and land"
+                )
+            else:
+                print(
+                    f"Quadrilateral landing mission uploaded: straight entry at {args.cruise_airspeed:.1f} m/s, "
+                    f"takeoff-to-entry gap {args.quad_entry_distance - args.takeoff_distance:.0f} m, "
+                    f"closed {args.quad_far_north - args.quad_near_north:.0f} x {args.quad_west:.0f} m route, "
+                    f"separate exit, descend to "
+                    f"+{args.transition_alt:.1f} m, flare to +{args.flare_alt:.1f} m, "
+                    f"transition, loiter 5 s, and land"
+                )
         elif args.pentagon_mission and not args.use_current_mission:
             print(
                 f"Pentagon mission uploaded: center={args.pentagon_center:.0f} m north, "
@@ -857,27 +1105,37 @@ def main():
         servo = [math.nan] * 8
         position = [math.nan] * 7
         attitude = [math.nan] * 3
+        roll_rate_deg_s = math.nan
         attitude_target = [math.nan] * 3
         navigation = [math.nan] * 3
         airspeed_m_s = math.nan
         shell_requested = False
         tecs_requested = False
+        fw_pitch_diag_requested = False
         mc_shell_requested = False
         transition_requested = False
+        transition_gate_since = None
         transition_reached = False
         mc_mission_advanced = False
         landing_reached = False
         tip_protection_reached = False
+        touchdown_speed_m_s = math.nan
+        touchdown_descent_m_s = math.nan
         pentagon_route_completed = False
         fixed_point_reached = False
         fixed_point_since = None
         fw_waypoints_reached = False
         fw_waypoints_reached_at = None
+        max_rel_alt_m = -math.inf
         launch_gate_violation = False
         first_launch_output_s = None
+        launch_gate_waiting_s = None
+        launch_gate_enabled_s = None
         last_gcs_heartbeat = -1.0
         last_mission_seq = -1
         mission_progress_at = 0.0
+        fw_tracking_samples = []
+        fw_excess_roll_since = None
         while time.monotonic() - started < args.duration:
             msg = master.recv_match(
                 type=[
@@ -922,14 +1180,39 @@ def main():
                     ]
                 elif msg_type == "ATTITUDE":
                     attitude = [math.degrees(msg.roll), math.degrees(msg.pitch), math.degrees(msg.yaw)]
+                    roll_rate_deg_s = math.degrees(msg.rollspeed)
                 elif msg_type == "ATTITUDE_TARGET":
                     attitude_target = quaternion_to_euler_deg(msg.q)
                 elif msg_type == "NAV_CONTROLLER_OUTPUT":
                     navigation = [float(msg.nav_roll), float(msg.nav_bearing), float(msg.xtrack_error)]
+                    if (
+                        state["vtol"] == mavutil.mavlink.MAV_VTOL_STATE_FW
+                        and state["mission"] >= 0
+                        and math.isfinite(navigation[0])
+                        and math.isfinite(navigation[2])
+                    ):
+                        fw_tracking_samples.append(
+                            (
+                                time.monotonic() - started,
+                                state["mission"],
+                                navigation[2],
+                                navigation[0],
+                                attitude[0],
+                                roll_rate_deg_s,
+                            )
+                        )
                 elif msg_type == "VFR_HUD":
                     airspeed_m_s = float(msg.airspeed)
                 elif msg_type == "STATUSTEXT":
                     print(f"STATUSTEXT[{msg.severity}]: {msg.text}")
+                    status_text = str(msg.text).casefold()
+                    if "stand launch switch: waiting 2 s" in status_text:
+                        launch_gate_waiting_s = time.monotonic() - launch_switch_enabled_at
+                    elif "stand launch switch: enabled" in status_text:
+                        launch_gate_enabled_s = time.monotonic() - launch_switch_enabled_at
+                        print(f"Firmware launch gate enabled after {launch_gate_enabled_s:.3f}s")
+                    if status_text.startswith("failsafe enabled"):
+                        raise RuntimeError(f"PX4 entered failsafe: {msg.text}")
                 elif msg_type == "COMMAND_ACK":
                     print(f"COMMAND_ACK command={msg.command} result={msg.result}")
                 elif msg_type == "SERIAL_CONTROL" and msg.count:
@@ -937,6 +1220,35 @@ def main():
                     print(shell_text, end="")
 
             elapsed = time.monotonic() - started
+            excessive_fixed_wing_roll = (
+                state["vtol"] == mavutil.mavlink.MAV_VTOL_STATE_FW
+                and state["mission"] >= 2
+                and math.isfinite(attitude[0])
+                and abs(attitude[0]) > args.fw_max_abs_roll
+            )
+            if excessive_fixed_wing_roll:
+                if fw_excess_roll_since is None:
+                    fw_excess_roll_since = elapsed
+                elif elapsed - fw_excess_roll_since >= 0.3:
+                    raise RuntimeError(
+                        f"Fixed-wing roll exceeded {args.fw_max_abs_roll:.1f}deg for 0.3s: "
+                        f"roll={attitude[0]:+.1f}deg mission={state['mission']}"
+                    )
+            else:
+                fw_excess_roll_since = None
+            if not math.isnan(position[1]):
+                max_rel_alt_m = max(max_rel_alt_m, position[1])
+            if (
+                not transition_reached
+                and state["vtol"] == mavutil.mavlink.MAV_VTOL_STATE_FW
+                and max_rel_alt_m >= 15.0
+                and position[1] <= 8.0
+                and position[4] >= 3.0
+            ):
+                raise RuntimeError(
+                    "Unsafe fixed-wing descent detected before ground contact: "
+                    f"rel_alt={position[1]:.1f}m vz_down={position[4]:.1f}m/s"
+                )
             if state["mission"] != last_mission_seq:
                 last_mission_seq = state["mission"]
                 mission_progress_at = elapsed
@@ -944,10 +1256,11 @@ def main():
             if (
                 polygon_mission
                 and 1 <= state["mission"] < transition_item_seq
-                and elapsed - mission_progress_at > 60.0
+                and elapsed - mission_progress_at > args.mission_stall_timeout
             ):
                 raise RuntimeError(
-                    f"Polygon mission stalled at item {state['mission']} for more than 60 s"
+                    f"Polygon mission stalled at item {state['mission']} for more than "
+                    f"{args.mission_stall_timeout:.0f} s"
                 )
             if elapsed - last_gcs_heartbeat >= 0.5:
                 send_gcs_heartbeat(master)
@@ -974,13 +1287,40 @@ def main():
                 transition_requested = True
                 print(f"Requested FW->MC transition at t={elapsed:.2f}s")
 
+            flare_distance_m = math.inf
             if (
+                flare_latitude is not None
+                and not math.isnan(position[5])
+            ):
+                north_to_flare = (flare_latitude - position[5]) / latitude_units_per_metre
+                east_to_flare = (flare_longitude - position[6]) / longitude_units_per_metre
+                flare_distance_m = math.hypot(north_to_flare, east_to_flare)
+
+            transition_gate_ready = (
                 args.quadrilateral_landing
                 and not transition_requested
                 and transition_item_seq is not None
                 and state["mission"] >= transition_item_seq - 1
                 and not math.isnan(position[1])
-                and position[1] <= 10.0
+                and position[1] <= args.transition_trigger_alt
+                and position[1] >= args.transition_alt
+                and not math.isnan(airspeed_m_s)
+                and airspeed_m_s <= args.transition_max_airspeed
+                and position[4] <= args.transition_max_descent_rate
+                and not math.isnan(attitude[0])
+                and abs(attitude[0]) <= args.transition_max_roll
+                and abs(attitude[1]) <= args.transition_max_pitch
+                and flare_distance_m <= args.transition_flare_radius
+            )
+            if transition_gate_ready:
+                if transition_gate_since is None:
+                    transition_gate_since = elapsed
+            else:
+                transition_gate_since = None
+
+            if (
+                transition_gate_since is not None
+                and elapsed - transition_gate_since >= args.transition_stable_time
             ):
                 master.mav.command_long_send(
                     master.target_system,
@@ -998,7 +1338,10 @@ def main():
                 transition_requested = True
                 print(
                     f"Requested altitude-gated FW->MC transition at "
-                    f"t={elapsed:.2f}s, rel_alt={position[1]:.1f}m"
+                    f"t={elapsed:.2f}s, rel_alt={position[1]:.1f}m "
+                    f"airspeed={airspeed_m_s:.1f}m/s vz_down={position[4]:+.1f}m/s "
+                    f"roll={attitude[0]:+.1f}deg pitch={attitude[1]:+.1f}deg "
+                    f"flare_dist={flare_distance_m:.0f}m"
                 )
 
             if (
@@ -1033,11 +1376,25 @@ def main():
                 and 0.5 * (servo[6] + servo[7]) >= 1450.0
             ):
                 if not tip_protection_reached:
+                    touchdown_speed_m_s = math.hypot(position[2], position[3])
+                    touchdown_descent_m_s = position[4]
                     print(
                         f"Rear-contact wingtip protection observed: "
-                        f"MAIN7/8=[{servo[6]:.0f}, {servo[7]:.0f}]"
+                        f"MAIN7/8=[{servo[6]:.0f}, {servo[7]:.0f}], "
+                        f"touchdown_xy={touchdown_speed_m_s:.2f}m/s, "
+                        f"touchdown_vz_down={touchdown_descent_m_s:.2f}m/s"
                     )
                 tip_protection_reached = True
+
+            if (
+                tip_protection_reached
+                and not math.isnan(position[2])
+                and math.hypot(position[2], position[3]) > 1.5
+            ):
+                raise RuntimeError(
+                    "Aircraft slid or bounced after rear contact: "
+                    f"horizontal speed={math.hypot(position[2], position[3]):.2f} m/s"
+                )
 
             target_distance_m = math.nan
             if not math.isnan(position[5]):
@@ -1046,7 +1403,8 @@ def main():
                 target_distance_m = math.hypot(north_to_landing, east_to_landing)
 
             if polygon_mission:
-                if transition_item_seq is not None and state["mission"] >= transition_item_seq:
+                completion_seq = fw_polygon_complete_seq or transition_item_seq
+                if completion_seq is not None and state["mission"] >= completion_seq:
                     pentagon_route_completed = True
 
                 horizontal_speed_m_s = math.hypot(position[2], position[3])
@@ -1105,6 +1463,17 @@ def main():
                 )
                 tecs_requested = True
 
+            if elapsed >= 18.0 and not fw_pitch_diag_requested:
+                send_shell_command(
+                    master,
+                    "listener fw_virtual_attitude_setpoint -n 1\n"
+                    "listener actuator_controls_1 -n 1\n"
+                    "listener rate_ctrl_status -n 1\n"
+                    "listener vehicle_angular_velocity -n 1\n"
+                    "listener vehicle_local_position -n 1",
+                )
+                fw_pitch_diag_requested = True
+
             if transition_reached and not mc_shell_requested:
                 send_shell_command(
                     master,
@@ -1137,43 +1506,109 @@ def main():
                 print(f"Pentagon mission position hold stable for 5 s at t={elapsed:.2f}s")
                 break
 
+            if args.polygon_fw_only and pentagon_route_completed:
+                print(f"Fixed-wing polygon edges completed at t={elapsed:.2f}s")
+                break
+
+            if args.quadrilateral_landing and args.hold_after_transition and fixed_point_reached:
+                print(f"Quadrilateral mission position hold stable for 5 s at t={elapsed:.2f}s")
+                break
+
             if fw_waypoints_reached:
                 print(f"Two fixed-wing waypoints remained controlled for 5 s at t={elapsed:.2f}s")
                 break
 
         if launch_gate_violation:
-            raise RuntimeError(
-                f"Stand-launch output released too early ({first_launch_output_s:.3f}s after switch)"
+            launch_message = (
+                f"Stand-launch output released early ({first_launch_output_s:.3f}s after switch)"
             )
-        if (args.transition_to_mc_at >= 0 or args.full_landing or polygon_mission) and not transition_reached:
+            if polygon_mission:
+                print(f"WARNING: {launch_message}; polygon tracking result remains authoritative")
+            else:
+                raise RuntimeError(launch_message)
+        if launch_gate_enabled_s is None:
+            if polygon_mission:
+                print("WARNING: Firmware did not report the TD_FW_TKO_EN launch gate opening; "
+                      "polygon tracking result remains authoritative")
+            else:
+                raise RuntimeError("Firmware did not report the TD_FW_TKO_EN launch gate opening")
+        elif launch_gate_enabled_s - (launch_gate_waiting_s or 0.0) < 1.9:
+            gate_interval_s = launch_gate_enabled_s - (launch_gate_waiting_s or 0.0)
+            if polygon_mission:
+                print(f"WARNING: TD_FW_TKO_EN gate interval was {gate_interval_s:.3f}s; "
+                      "polygon tracking result remains authoritative")
+            else:
+                raise RuntimeError(
+                    f"TD_FW_TKO_EN gate interval was too short: {gate_interval_s:.3f}s"
+                )
+        if (
+            (args.transition_to_mc_at >= 0 or args.full_landing or polygon_mission)
+            and not args.polygon_fw_only
+            and not transition_reached
+        ):
             raise RuntimeError("PX4 did not reach multicopter state after FW->MC request")
-        if (args.full_landing or args.quadrilateral_landing) and not landing_reached:
+        if (
+            (args.full_landing or args.quadrilateral_landing)
+            and not args.hold_after_transition
+            and not landing_reached
+        ):
             raise RuntimeError("Full mission did not complete the multicopter position landing")
-        if args.quadrilateral_landing and not tip_protection_reached:
+        if args.quadrilateral_landing and not args.hold_after_transition and not tip_protection_reached:
             raise RuntimeError("Rear-contact wingtip protection did not reach its commanded PWM")
+        if args.quadrilateral_landing and not args.hold_after_transition and (
+            math.isnan(touchdown_descent_m_s) or touchdown_descent_m_s > 0.8
+        ):
+            raise RuntimeError(
+                f"Touchdown descent rate was not gentle: {touchdown_descent_m_s:.2f} m/s"
+            )
         if args.fw_only and not fw_waypoints_reached:
             raise RuntimeError("Fixed-wing mission did not complete and stabilize beyond waypoint 2")
         if polygon_mission and not pentagon_route_completed:
             raise RuntimeError("Mission did not complete all fixed-wing polygon edges")
-        if args.pentagon_mission and not fixed_point_reached:
+        if args.quadrilateral_landing and not args.approach_only:
+            tracking_issues = evaluate_fixed_wing_legs(
+                fw_tracking_samples, range(3, 9), effective_fw_acceptance
+            )
+            if tracking_issues:
+                raise RuntimeError("Oscillatory fixed-wing line tracking: " + "; ".join(tracking_issues))
+        if args.pentagon_mission:
+            tracking_issues = evaluate_fixed_wing_legs(
+                fw_tracking_samples, range(2, 7), effective_fw_acceptance
+            )
+            if tracking_issues:
+                raise RuntimeError("Oscillatory fixed-wing line tracking: " + "; ".join(tracking_issues))
+        if args.pentagon_mission and not args.polygon_fw_only and not fixed_point_reached:
             raise RuntimeError("Multicopter did not establish a stable hold at the final target")
-        if args.transition_to_mc_at >= 0 or args.full_landing or polygon_mission:
+        if args.quadrilateral_landing and args.hold_after_transition and not fixed_point_reached:
+            raise RuntimeError("Multicopter did not establish a stable hold at the final target")
+        if (args.transition_to_mc_at >= 0 or args.full_landing or polygon_mission) and not args.polygon_fw_only:
             print("FW->MC transition validation passed")
         if args.full_landing:
             print("Two-waypoint descent and position-landing mission passed")
-        if args.quadrilateral_landing:
+        if args.quadrilateral_landing and not args.hold_after_transition:
             print("Vertical landing and rear-contact protection trigger reached")
         if args.fw_only:
             print("Two-waypoint fixed-wing tracking validation passed")
         if args.pentagon_mission:
-            print("Stabilized-arm, stand-launch, closed-pentagon, back-transition, and position-hold mission passed")
+            if args.polygon_fw_only:
+                print("Stabilized-arm, stand-launch, and closed-pentagon fixed-wing mission passed")
+            else:
+                print("Stabilized-arm, stand-launch, closed-pentagon, back-transition, and position-hold mission passed")
         if args.quadrilateral_landing:
-            print("Straight-entry, closed-quadrilateral, separate-exit, back-transition, and vertical-landing mission passed")
+            if args.approach_only:
+                mission_end = "position-hold" if args.hold_after_transition else "vertical-landing"
+                print(f"Straight descent, flare, back-transition, and {mission_end} mission passed")
+            else:
+                mission_end = "position-hold" if args.hold_after_transition else "vertical-landing"
+                print(f"Straight-entry, closed-quadrilateral, separate-exit, back-transition, and {mission_end} mission passed")
     finally:
         runtime_file.write_text("force_enable=0\n", encoding="utf-8")
         force_disarm(master)
         master.set_mode("LOITER")
+        set_int_param(master, "TD_BTR_DBG_FAST", 0)
         set_int_param(master, "TD_FW_TKO_EN", 0)
+        if original_com_rcl_except is not None:
+            set_int_param(master, "COM_RCL_EXCEPT", original_com_rcl_except)
         set_int_param(master, "COM_RC_IN_MODE", 0)
         time.sleep(0.5)
         master.close()

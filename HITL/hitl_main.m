@@ -35,32 +35,45 @@ fprintf("[HITL] Initial mode:\nforce_enable=%d init_mode=%s q_eb=[%.6f %.6f %.6f
 ser = serial_open(cfg);
 cleanup = onCleanup(@() clear("ser")); %#ok<NASGU>
 
-pacer_state = real_time_pacer([], 0, cfg);
-t = 0;
+wall_start = tic;
+last_step_wall_s = 0;
+next_tick_s = cfg.sample_time;
 last_print_t = -inf;
 
-while t < max_time_s
-    cfg = update_runtime_control(cfg, t);
+while true
+    wall_t = toc(wall_start);
+    if wall_t >= max_time_s
+        break;
+    end
+
+    step_s = min(max(wall_t - last_step_wall_s, 0), cfg.model.max_runtime_step_s);
+    last_step_wall_s = wall_t;
+
+    cfg = update_runtime_control(cfg, wall_t);
     bytes = serial_read_bytes(ser);
     servo_msg = mavlink_decode_servo_output_raw(bytes, cfg);
     u = actuator_from_servo_output_raw(servo_msg, u, cfg);
 
-    x = integrate_aircraft_step(t, x, u, param, cfg);
+    x = integrate_aircraft_step(wall_t - step_s, x, u, param, cfg, step_s);
 
-    uav = state_to_uavdata_like(t, x, u, param, cfg);
+    uav = state_to_uavdata_like(wall_t, x, u, param, cfg);
     payload = uavdata_to_hil_state_quaternion_payload(uav, cfg);
-    sensor_payload = uavdata_to_hil_sensor_payload(uav, cfg);
-    tx_bytes = mavlink_encode_hil_bundle(sensor_payload, payload, cfg);
+    tx_bytes = mavlink_encode_hil_state_quaternion(payload, cfg);
     serial_write_bytes(ser, tx_bytes);
 
-    if t - last_print_t >= 1
+    if wall_t - last_print_t >= 1
         fprintf("t=%.2f is_new=%d u_throttle=[%s] lat=%.7f lon=%.7f AMSL=%.2f TAS=%.2f EAS=%.2f force_enable=%d\n", ...
-            t, logical(servo_msg.is_new), sprintf("%.2f ", u(1:10)), ...
+            wall_t, logical(servo_msg.is_new), sprintf("%.2f ", u(1:10)), ...
             uav.lat_deg, uav.lon_deg, uav.AMSL, uav.TAS, uav.EAS, cfg.model.force_enable);
-        last_print_t = t;
+        last_print_t = wall_t;
     end
 
-    pacer_state = real_time_pacer(pacer_state, t + cfg.sample_time, cfg);
-    t = t + cfg.sample_time;
+    now_s = toc(wall_start);
+    if now_s < next_tick_s
+        pause(next_tick_s - now_s);
+    else
+        next_tick_s = now_s;
+    end
+    next_tick_s = next_tick_s + cfg.sample_time;
 end
 end

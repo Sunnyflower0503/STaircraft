@@ -25,8 +25,17 @@ end
 TAS = norm(v_e - wind_e);
 EAS = TAS * sqrt(max(rho, 0) / cfg.env.rho0);
 
-% TODO: confirm whether ab matches the original Simulink specific-force convention exactly.
-ab = estimate_body_accel(t, x, u, param, cfg, q_eb);
+% A frozen HITL pose represents an aircraft supported by an external
+% constraint. Report the corresponding static specific force so PX4's EKF
+% does not interpret force_enable=0 as free fall while the state is frozen.
+if is_frozen_pose(cfg)
+    dcm_be = quat_to_dcm_be(q_eb);
+    gravity_e = [0; 0; cfg.env.g];
+    ab = -dcm_be * gravity_e;
+else
+    % TODO: confirm whether ab matches the original Simulink specific-force convention exactly.
+    ab = estimate_body_accel(t, x, u, param, cfg, q_eb);
+end
 
 uav = struct();
 uav.time_s = t;
@@ -41,6 +50,11 @@ uav.AMSL = amsl;
 uav.ab = ab;
 uav.TAS = TAS;
 uav.EAS = EAS;
+end
+
+function tf = is_frozen_pose(cfg)
+tf = isfield(cfg, "model") && isfield(cfg.model, "force_enable") && ...
+    double(cfg.model.force_enable) == 0;
 end
 
 function [lat0, lon0, amsl0] = initial_geo(param, cfg)

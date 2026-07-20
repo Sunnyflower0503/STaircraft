@@ -1,5 +1,9 @@
-function bytes = mavlink_encode_hil_state_quaternion(payload, cfg)
+function bytes = mavlink_encode_hil_state_quaternion(payload, cfg, rear_contact)
 %MAVLINK_ENCODE_HIL_STATE_QUATERNION Encode HIL_STATE_QUATERNION bytes.
+
+if nargin < 3
+    rear_contact = false;
+end
 
 backend_dir = fullfile(fileparts(mfilename("fullpath")), "mavlink_backend");
 if exist(backend_dir, "dir") && ~contains(path, backend_dir)
@@ -10,7 +14,7 @@ switch string(cfg.mavlink.backend)
     case "stub"
         error("MAVLink encode backend is not configured.");
     case "pymavlink"
-        bytes = pymavlink_encode_hil_state_quaternion(payload, cfg);
+        bytes = pymavlink_encode_hil_state_quaternion(payload, cfg, rear_contact);
     otherwise
         error("Unsupported MAVLink encode backend '%s'. Configure pymavlink or MATLAB UAV Toolbox integration.", cfg.mavlink.backend);
 end

@@ -35,4 +35,8 @@ end
 assert(isa(bytes, "uint8"), "Encoded bytes must be uint8.");
 assert(~isempty(bytes), "Encoded bytes must be non-empty.");
 assert(bytes(1) == uint8(hex2dec("FD")), "Expected MAVLink v2 frame header 0xFD.");
+
+bytes_with_contact = mavlink_encode_hil_state_quaternion(payload, cfg, true);
+assert(numel(bytes_with_contact) > numel(bytes), ...
+    "Rear-contact output must append TD_REAR without adding HIL_SENSOR.");
 end

@@ -1,4 +1,4 @@
-function state = stand_takeoff_state_step(state, main_throttle, active_contact_count, dt, cfg)
+function state = stand_takeoff_state_step(state, main_throttle, active_contact_count, dt, cfg, gentle_rear_contact)
 %STAND_TAKEOFF_STATE_STEP Update stand-release, liftoff, and landing state.
 
 arguments
@@ -7,6 +7,7 @@ arguments
     active_contact_count (1, 1) double
     dt (1, 1) double {mustBeNonnegative}
     cfg struct
+    gentle_rear_contact (1, 1) logical = false
 end
 
 state = ensure_state_fields(state);
@@ -16,7 +17,9 @@ state.just_landing_confirmed = false;
 
 switch string(state.phase)
     case "STAND_HOLD"
-        if main_throttle > cfg.stand.release_throttle
+        dynamics_enabled = isfield(cfg, "model") && isfield(cfg.model, "force_enable") && ...
+            double(cfg.model.force_enable) == 1;
+        if dynamics_enabled && main_throttle > cfg.stand.release_throttle
             state.release_timer_s = state.release_timer_s + dt;
         else
             state.release_timer_s = 0;
@@ -51,7 +54,8 @@ if state.stand_released && string(state.phase) ~= "LANDED"
         state.just_liftoff_confirmed = true;
     end
 
-    if state.liftoff_confirmed && active_contact_count >= cfg.landing.min_active_contacts
+    landing_contact_valid = active_contact_count >= cfg.landing.min_active_contacts || gentle_rear_contact;
+    if state.liftoff_confirmed && landing_contact_valid
         state.landing_timer_s = state.landing_timer_s + dt;
     else
         state.landing_timer_s = 0;

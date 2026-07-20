@@ -56,6 +56,13 @@ class MavlinkBridge:
             "statustext_new": False,
             "severity": 0,
             "text": "",
+            "extended_sys_state_new": False,
+            "vtol_state": 0,
+            "landed_state": 0,
+            "heartbeat_new": False,
+            "base_mode": 0,
+            "custom_mode": 0,
+            "armed": False,
         }
         for value in byte_values:
             msg = self.diagnostic_decoder.parse_char(bytes([int(value) & 0xFF]))
@@ -72,9 +79,18 @@ class MavlinkBridge:
                 if isinstance(text, bytes):
                     text = text.decode("utf-8", errors="replace")
                 result["text"] = str(text).rstrip("\x00")
+            elif msg.get_type() == "EXTENDED_SYS_STATE":
+                result["extended_sys_state_new"] = True
+                result["vtol_state"] = int(msg.vtol_state)
+                result["landed_state"] = int(msg.landed_state)
+            elif msg.get_type() == "HEARTBEAT":
+                result["heartbeat_new"] = True
+                result["base_mode"] = int(msg.base_mode)
+                result["custom_mode"] = int(msg.custom_mode)
+                result["armed"] = bool(msg.base_mode & mavlink2.MAV_MODE_FLAG_SAFETY_ARMED)
         return result
 
-    def encode_hil_state_quaternion(self, payload):
+    def encode_hil_state_quaternion(self, payload, rear_contact=False):
         q = list(payload["attitude_quaternion"])
         msg = mavlink2.MAVLink_hil_state_quaternion_message(
             int(payload["time_usec"]),
@@ -96,6 +112,13 @@ class MavlinkBridge:
         )
         self.output.clear()
         self.encoder.send(msg, force_mavlink1=False)
+        if bool(rear_contact):
+            contact_msg = self.encoder.named_value_float_encode(
+                int(payload["time_usec"] // 1000),
+                b"TD_REAR",
+                1.0,
+            )
+            self.encoder.send(contact_msg, force_mavlink1=False)
         return self.output.bytes()
 
     def encode_hil_sensor(self, payload):

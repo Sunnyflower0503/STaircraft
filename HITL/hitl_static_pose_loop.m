@@ -14,7 +14,7 @@ fprintf("Serial : Nora/PX4 -> MATLAB %s\n", cfg.serial.port);
 fprintf("Mode   : %s\n", mode_name);
 fprintf("Force  : follows runtime_control.txt force_enable\n");
 fprintf("RX     : SERVO_OUTPUT_RAW\n");
-fprintf("TX     : HIL_STATE_QUATERNION\n");
+fprintf("TX     : HIL_STATE_QUATERNION only\n");
 if isfinite(duration_s)
     fprintf("Stop   : automatic after %.1f s\n", duration_s);
 else
@@ -138,10 +138,14 @@ while true
 
     % Sensor sample time must continue while the plant state is frozen;
     % otherwise PX4 rejects repeated HIL_SENSOR timestamps as stale.
+    % state_to_uavdata_like supplies the one-g supported-pose IMU sample
+    % whenever force_enable=0, so the EKF remains stationary with x frozen.
     uav = state_to_uavdata_like(elapsed_s, x, u, param, cfg);
     payload = uavdata_to_hil_state_quaternion_payload(uav, cfg);
-    sensor_payload = uavdata_to_hil_sensor_payload(uav, cfg);
-    tx_bytes = mavlink_encode_hil_bundle(sensor_payload, payload, cfg);
+    % Publish one authoritative truth-state source at the serial-link rate.
+    % Do not combine this with HIL_SENSOR: PX4's custom HIL_STATE handler
+    % already publishes attitude, position, velocity, rates, accel and airspeed.
+    tx_bytes = mavlink_encode_hil_state_quaternion(payload, cfg);
     serial_write_bytes(ser, tx_bytes);
 
     stats.tx_bytes_total = stats.tx_bytes_total + numel(tx_bytes);

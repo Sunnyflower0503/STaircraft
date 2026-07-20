@@ -18,7 +18,7 @@ fprintf("Serial : Nora/PX4 -> MATLAB COM4\n");
 fprintf("Mode   : stand_takeoff\n");
 fprintf("Stand  : hold until throttle release\n");
 fprintf("RX     : SERVO_OUTPUT_RAW\n");
-fprintf("TX     : HIL_STATE_QUATERNION\n");
+fprintf("TX     : HIL_STATE_QUATERNION only\n");
 fprintf("Stop   : landing detected or Ctrl+C\n");
 fprintf("========================================\n");
 
@@ -161,7 +161,7 @@ while ~stop_after_landing
     main_throttle = mean(u(1:8));
 
     plant_step_s = 0;
-    if state.stand_released
+    if state.stand_released && string(state.phase) ~= "LANDED"
         flight_wall_time_s = flight_wall_time_s + state_dt_s;
         plant_step_s = min(state_dt_s, cfg.model.max_runtime_step_s);
         x = integrate_aircraft_step(plant_time_s, x, u, param, cfg_flight, plant_step_s);
@@ -169,12 +169,17 @@ while ~stop_after_landing
     end
 
     contact_diag = hitl_ground_contact_diagnostics(x, param);
+    rear_contact = numel(contact_diag.active) >= 6 && all(contact_diag.active(4:6));
+    gentle_rear_contact = rear_contact ...
+        && norm(x(4:5)) <= cfg.landing.rear_contact_max_xy_speed ...
+        && x(6) <= cfg.landing.rear_contact_max_down_speed;
     if state.stand_released
         state_step_s = plant_step_s;
     else
         state_step_s = state_dt_s;
     end
-    state = stand_takeoff_state_step(state, main_throttle, contact_diag.active_contact_count, state_step_s, cfg);
+    state = stand_takeoff_state_step(state, main_throttle, contact_diag.active_contact_count, ...
+        state_step_s, cfg, gentle_rear_contact);
 
     if state.just_released
         fprintf("[HITL] Stand released: throttle=%.3f t=%.3f\n", main_throttle, wall_time_s);
@@ -183,21 +188,33 @@ while ~stop_after_landing
         fprintf("[HITL] Liftoff confirmed at t=%.3f\n", plant_time_s);
     end
     if state.just_landing_confirmed
+        % A tailsitter is supported by its three rear points before the front
+        % points touch. Once that contact is continuously gentle, impose the
+        % intended static-ground terminal constraint instead of continuing to
+        % integrate an armed position controller against a stiff spring.
+        x(4:6) = 0;
+        x(11:13) = 0;
         fprintf("[HITL] Landing confirmed: active_contact_count=%d/6 at t=%.3f\n", ...
             contact_diag.active_contact_count, plant_time_s);
         fprintf("[HITL] Holding the ground model for 2 s to verify rear-contact protection.\n");
         landing_confirmed_wall_s = wall_time_s;
     end
-    if isfinite(landing_confirmed_wall_s) && wall_time_s - landing_confirmed_wall_s >= 2.0
+    if isfinite(landing_confirmed_wall_s) ...
+            && wall_time_s - landing_confirmed_wall_s >= cfg.landing.post_confirm_hold_s
         fprintf("[HITL] Simulation stopped after the post-landing protection window.\n");
         stop_after_landing = true;
     end
 
-    uav = state_to_uavdata_like(wall_time_s, x, u, param, cfg);
+    cfg_sensor = cfg;
+    if ~state.stand_released
+        % The external stand still supports the aircraft even if dynamics
+        % have been enabled. Keep the IMU consistent with a static pose
+        % until the stand-release gate actually opens.
+        cfg_sensor.model.force_enable = 0;
+    end
+    uav = state_to_uavdata_like(wall_time_s, x, u, param, cfg_sensor);
     payload = uavdata_to_hil_state_quaternion_payload(uav, cfg);
-    sensor_payload = uavdata_to_hil_sensor_payload(uav, cfg);
-    rear_contact = numel(contact_diag.active) >= 6 && all(contact_diag.active(4:6));
-    tx_bytes = mavlink_encode_hil_bundle(sensor_payload, payload, cfg, rear_contact);
+    tx_bytes = mavlink_encode_hil_state_quaternion(payload, cfg, rear_contact);
     serial_write_bytes(ser, tx_bytes);
 
     stats.tx_bytes_total = stats.tx_bytes_total + numel(tx_bytes);
