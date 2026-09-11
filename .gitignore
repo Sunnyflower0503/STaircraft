@@ -14,11 +14,17 @@ cpp_model/build/
 # =========================
 *.mat
 *.fig
-*.asv      # MATLAB 自动保存
-*.mex*     # MEX 编译产物
-*.p        # P-code
+# MATLAB autosave, MEX output, and P-code
+*.asv
+*.mex*
+*.p
 *.slxc
 *.slx.autosave
+
+# Python cache and editor swap files
+__pycache__/
+*.py[cod]
+*.swp
 
 # =========================
 # HITL logs & cache (重点!)
@@ -31,6 +37,7 @@ HITL/cache/
 # =========================
 result/
 *.csv
+/slipstream_lift_alpha_sweep.png
 
 # =========================
 # OS & temp files
