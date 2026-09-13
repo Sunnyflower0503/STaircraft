@@ -4,7 +4,7 @@ root = fileparts(this_dir);
 addpath(root); addpath(fullfile(root, "utils")); addpath(fullfile(fileparts(root), "matlab_model"));
 
 tests = {@test_actuator_from_servo_output_raw, @test_apply_actuator_transport_delay, @test_user_hitl_config, @test_apply_user_initial_conditions, @test_update_runtime_control, @test_stand_takeoff_state_step, @test_prepare_stand_static_for_hitl, @test_initial_geodetic_position, @test_state_to_uavdata_like, @test_frozen_runner_specific_force, ...
-    @test_hil_state_quaternion_payload, @test_mavlink_encode_hil_state_quaternion, @test_integrate_aircraft_step, @test_openloop_model};
+    @test_hil_state_quaternion_payload, @test_mavlink_encode_hil_state_quaternion, @test_integrate_aircraft_step, @test_stiff_ground_substep, @test_openloop_model};
 for k = 1:numel(tests)
     fprintf("Running %s...\n", func2str(tests{k}));
     tests{k}();

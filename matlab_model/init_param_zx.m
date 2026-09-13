@@ -124,8 +124,13 @@ param.wind = [0; 0; 0];
 param.ground.enable = false;
 param.ground.z = 0;                    % 地面高度 [m]
 param.ground.tol = 1e-4;               % 接触判定容差 [m]
-param.ground.k = 700;                  % 穿地修正弹簧 [N/m]
-param.ground.c = 70;                   % 法向阻尼 [N/(m/s)]
+% Six-point landing uses a stiff, well-damped surface.  The previous
+% 700 N/m surface allowed the aircraft to exchange contacts repeatedly after
+% rear touchdown, which looked like a trampoline in HITL.  Keep damping high
+% enough to dissipate touchdown energy without making the unilateral spring
+% numerically adhesive during separation.
+param.ground.k = 7000;                 % 穿地修正弹簧 [N/m]
+param.ground.c = 180;                  % 法向阻尼 [N/(m/s)]
 param.ground.mu = 0.55;                % 地面摩擦系数
 param.ground.xy_damping = 35;          % 低速滑行阻尼 [N/(m/s)]
 param.ground.friction_v_eps = 0.05;    % 摩擦速度正则化 [m/s]

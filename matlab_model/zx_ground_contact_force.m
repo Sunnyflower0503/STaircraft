@@ -14,8 +14,8 @@ end
 
 num_points = size(contact_points_b, 2);
 z_ground = get_ground_field(gnd, 'z', 0);
-k = expand_ground_param(get_ground_field(gnd, 'k', 700), num_points, 'k');
-c = expand_ground_param(get_ground_field(gnd, 'c', 70), num_points, 'c');
+k = expand_ground_param(get_ground_field(gnd, 'k', 7000), num_points, 'k');
+c = expand_ground_param(get_ground_field(gnd, 'c', 180), num_points, 'c');
 mu = expand_ground_param(get_ground_field(gnd, 'mu', 0.55), num_points, 'mu');
 xy_damping = expand_ground_param(get_ground_field(gnd, 'xy_damping', 35), num_points, 'xy_damping');
 v_eps = get_ground_field(gnd, 'friction_v_eps', 0.05);
