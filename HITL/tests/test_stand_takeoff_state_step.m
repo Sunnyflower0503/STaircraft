@@ -6,7 +6,7 @@ cfg = hitl_config();
 cfg.stand.release_throttle = 0.4;
 cfg.stand.release_hold_s = 0.1;
 cfg.landing.liftoff_confirm_s = 0.05;
-cfg.landing.min_active_contacts = 5;
+cfg.landing.min_active_contacts = 6;
 cfg.landing.confirm_s = 0.1;
 cfg.model.force_enable = 1;
 
@@ -76,29 +76,29 @@ assert(state.phase == "FLIGHT", "4/6 contacts after liftoff should not count as 
 
 state = make_liftoff_state(cfg, dt);
 for k = 1:10
-    state = stand_takeoff_state_step(state, 0.0, 3, dt, cfg, true);
+    state = stand_takeoff_state_step(state, 0.0, 3, dt, cfg);
 end
-assert(state.phase == "LANDED", ...
-    "Three continuously gentle rear contacts should confirm tailsitter landing.");
+assert(state.phase == "FLIGHT", ...
+    "Rear-three contact must start protection without confirming full landing.");
 
 state = make_liftoff_state(cfg, dt);
 for k = 1:10
     state = stand_takeoff_state_step(state, 0.0, 5, dt, cfg);
 end
-assert(state.phase == "LANDED", "5/6 contacts held for 0.1 s should land.");
-assert(state.just_landing_confirmed, "Landing confirmation event should be raised.");
+assert(state.phase == "FLIGHT", "5/6 contacts must not confirm full landing.");
 
 state = make_liftoff_state(cfg, dt);
 for k = 1:10
     state = stand_takeoff_state_step(state, 0.0, 6, dt, cfg);
 end
 assert(state.phase == "LANDED", "6/6 contacts held for 0.1 s should land.");
+assert(state.just_landing_confirmed, "Landing confirmation event should be raised.");
 
 state = make_liftoff_state(cfg, dt);
 for k = 1:5
-    state = stand_takeoff_state_step(state, 0.0, 5, dt, cfg);
+    state = stand_takeoff_state_step(state, 0.0, 6, dt, cfg);
 end
-assert(state.landing_timer_s > 0, "Landing timer should accumulate during active contact.");
+assert(state.landing_timer_s > 0, "Landing timer should accumulate during 6/6 contact.");
 state = stand_takeoff_state_step(state, 0.0, 0, dt, cfg);
 assert(state.landing_timer_s == 0, "Landing timer should reset after contact is lost.");
 assert(state.phase == "FLIGHT", "Brief contact shorter than 0.1 s should not land.");

@@ -4,6 +4,10 @@ root = fileparts(this_dir);
 addpath(root); addpath(fullfile(root, "utils")); addpath(fullfile(root, "mavlink_backend"));
 
 cfg = hitl_config();
+assert(hitl_contact_bitmask([false false false true true true]) == uint8(56), ...
+    "Rear-three contacts must occupy TD_CNTCT bits 3..5.");
+assert(hitl_contact_bitmask(true(1, 6)) == uint8(63), ...
+    "All six contacts must encode as TD_CNTCT=63.");
 payload = struct();
 payload.time_usec = uint64(1000000);
 payload.attitude_quaternion = single([1 0 0 0]);
@@ -36,7 +40,7 @@ assert(isa(bytes, "uint8"), "Encoded bytes must be uint8.");
 assert(~isempty(bytes), "Encoded bytes must be non-empty.");
 assert(bytes(1) == uint8(hex2dec("FD")), "Expected MAVLink v2 frame header 0xFD.");
 
-bytes_with_contact = mavlink_encode_hil_state_quaternion(payload, cfg, true);
-assert(numel(bytes_with_contact) > numel(bytes), ...
-    "Rear-contact output must append TD_REAR without adding HIL_SENSOR.");
+bytes_with_contact = mavlink_encode_hil_state_quaternion(payload, cfg, uint8(56));
+assert(numel(bytes_with_contact) == numel(bytes), ...
+    "TD_CNTCT must be present at a fixed frame size for zero and nonzero masks.");
 end

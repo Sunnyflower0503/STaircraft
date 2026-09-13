@@ -1,4 +1,4 @@
-function state = stand_takeoff_state_step(state, main_throttle, active_contact_count, dt, cfg, gentle_rear_contact)
+function state = stand_takeoff_state_step(state, main_throttle, active_contact_count, dt, cfg)
 %STAND_TAKEOFF_STATE_STEP Update stand-release, liftoff, and landing state.
 
 arguments
@@ -7,7 +7,6 @@ arguments
     active_contact_count (1, 1) double
     dt (1, 1) double {mustBeNonnegative}
     cfg struct
-    gentle_rear_contact (1, 1) logical = false
 end
 
 state = ensure_state_fields(state);
@@ -54,7 +53,7 @@ if state.stand_released && string(state.phase) ~= "LANDED"
         state.just_liftoff_confirmed = true;
     end
 
-    landing_contact_valid = active_contact_count >= cfg.landing.min_active_contacts || gentle_rear_contact;
+    landing_contact_valid = active_contact_count >= cfg.landing.min_active_contacts;
     if state.liftoff_confirmed && landing_contact_valid
         state.landing_timer_s = state.landing_timer_s + dt;
     else

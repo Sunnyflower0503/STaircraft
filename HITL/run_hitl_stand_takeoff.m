@@ -169,17 +169,14 @@ while ~stop_after_landing
     end
 
     contact_diag = hitl_ground_contact_diagnostics(x, param);
-    rear_contact = numel(contact_diag.active) >= 6 && all(contact_diag.active(4:6));
-    gentle_rear_contact = rear_contact ...
-        && norm(x(4:5)) <= cfg.landing.rear_contact_max_xy_speed ...
-        && x(6) <= cfg.landing.rear_contact_max_down_speed;
+    contact_mask = hitl_contact_bitmask(contact_diag.active);
     if state.stand_released
         state_step_s = plant_step_s;
     else
         state_step_s = state_dt_s;
     end
     state = stand_takeoff_state_step(state, main_throttle, contact_diag.active_contact_count, ...
-        state_step_s, cfg, gentle_rear_contact);
+        state_step_s, cfg);
 
     if state.just_released
         fprintf("[HITL] Stand released: throttle=%.3f t=%.3f\n", main_throttle, wall_time_s);
@@ -188,10 +185,8 @@ while ~stop_after_landing
         fprintf("[HITL] Liftoff confirmed at t=%.3f\n", plant_time_s);
     end
     if state.just_landing_confirmed
-        % A tailsitter is supported by its three rear points before the front
-        % points touch. Once that contact is continuously gentle, impose the
-        % intended static-ground terminal constraint instead of continuing to
-        % integrate an armed position controller against a stiff spring.
+        % Rear contact starts the firmware protection controller, but the plant
+        % remains dynamic until all six permanent points are continuously down.
         x(4:6) = 0;
         x(11:13) = 0;
         fprintf("[HITL] Landing confirmed: active_contact_count=%d/6 at t=%.3f\n", ...
@@ -214,7 +209,7 @@ while ~stop_after_landing
     end
     uav = state_to_uavdata_like(wall_time_s, x, u, param, cfg_sensor);
     payload = uavdata_to_hil_state_quaternion_payload(uav, cfg);
-    tx_bytes = mavlink_encode_hil_state_quaternion(payload, cfg, rear_contact);
+    tx_bytes = mavlink_encode_hil_state_quaternion(payload, cfg, contact_mask);
     serial_write_bytes(ser, tx_bytes);
 
     stats.tx_bytes_total = stats.tx_bytes_total + numel(tx_bytes);
@@ -228,6 +223,7 @@ while ~stop_after_landing
     stats.stand_released = state.stand_released;
     stats.liftoff_confirmed = state.liftoff_confirmed;
     stats.active_contact_count = contact_diag.active_contact_count;
+    stats.contact_mask = contact_mask;
     stats.main_throttle = main_throttle;
     stats.force_enable = cfg.model.force_enable;
     stats.position_ned = x(1:3);
@@ -299,6 +295,7 @@ stats.phase = "STAND_HOLD";
 stats.stand_released = false;
 stats.liftoff_confirmed = false;
 stats.active_contact_count = 0;
+stats.contact_mask = uint8(0);
 stats.main_throttle = 0;
 stats.force_enable = cfg.model.force_enable;
 stats.rx_bytes_total = 0;
@@ -344,6 +341,7 @@ history.servo_raw = zeros(8, 0);
 history.force_enable = zeros(1, 0);
 history.main_throttle = zeros(1, 0);
 history.active_contact_count = zeros(1, 0);
+history.contact_mask = zeros(1, 0, "uint8");
 history.phase = strings(1, 0);
 end
 
@@ -360,6 +358,7 @@ history.servo_raw(:, end + 1) = stats.last_servo_raw(:);
 history.force_enable(end + 1) = stats.force_enable;
 history.main_throttle(end + 1) = stats.main_throttle;
 history.active_contact_count(end + 1) = stats.active_contact_count;
+history.contact_mask(end + 1) = stats.contact_mask;
 history.phase(end + 1) = string(stats.phase);
 end
 

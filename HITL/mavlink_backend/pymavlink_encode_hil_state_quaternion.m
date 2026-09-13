@@ -1,8 +1,8 @@
-function bytes = pymavlink_encode_hil_state_quaternion(payload, cfg, rear_contact)
+function bytes = pymavlink_encode_hil_state_quaternion(payload, cfg, contact_mask)
 %PYMAVLINK_ENCODE_HIL_STATE_QUATERNION Encode HIL_STATE_QUATERNION via pymavlink.
 
 if nargin < 3
-    rear_contact = false;
+    contact_mask = uint8(0);
 end
 
 persistent bridge
@@ -28,7 +28,7 @@ py_payload{"xacc"} = py.int(int16(payload.xacc));
 py_payload{"yacc"} = py.int(int16(payload.yacc));
 py_payload{"zacc"} = py.int(int16(payload.zacc));
 
-py_bytes = bridge.encode_hil_state_quaternion(py_payload, py.bool(logical(rear_contact)));
+py_bytes = bridge.encode_hil_state_quaternion(py_payload, py.int(uint8(contact_mask)));
 bytes = uint8(py.array.array("B", py_bytes));
 bytes = bytes(:);
 end

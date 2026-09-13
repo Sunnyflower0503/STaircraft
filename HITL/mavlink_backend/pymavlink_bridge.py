@@ -90,7 +90,7 @@ class MavlinkBridge:
                 result["armed"] = bool(msg.base_mode & mavlink2.MAV_MODE_FLAG_SAFETY_ARMED)
         return result
 
-    def encode_hil_state_quaternion(self, payload, rear_contact=False):
+    def encode_hil_state_quaternion(self, payload, contact_mask=0):
         q = list(payload["attitude_quaternion"])
         msg = mavlink2.MAVLink_hil_state_quaternion_message(
             int(payload["time_usec"]),
@@ -112,13 +112,12 @@ class MavlinkBridge:
         )
         self.output.clear()
         self.encoder.send(msg, force_mavlink1=False)
-        if bool(rear_contact):
-            contact_msg = self.encoder.named_value_float_encode(
-                int(payload["time_usec"] // 1000),
-                b"TD_REAR",
-                1.0,
-            )
-            self.encoder.send(contact_msg, force_mavlink1=False)
+        contact_msg = self.encoder.named_value_float_encode(
+            int(payload["time_usec"] // 1000),
+            b"TD_CNTCT",
+            float(int(contact_mask) & 0x3F),
+        )
+        self.encoder.send(contact_msg, force_mavlink1=False)
         return self.output.bytes()
 
     def encode_hil_sensor(self, payload):
@@ -144,7 +143,7 @@ class MavlinkBridge:
         self.encoder.send(msg, force_mavlink1=False)
         return self.output.bytes()
 
-    def encode_hil_sensor_and_state(self, sensor, state, rear_contact=False):
+    def encode_hil_sensor_and_state(self, sensor, state, contact_mask=0):
         sensor_msg = mavlink2.MAVLink_hil_sensor_message(
             int(sensor["time_usec"]),
             float(sensor["xacc"]), float(sensor["yacc"]), float(sensor["zacc"]),
@@ -169,8 +168,8 @@ class MavlinkBridge:
         self.encoder.send(state_msg, force_mavlink1=False)
         contact_msg = self.encoder.named_value_float_encode(
             int(state["time_usec"] // 1000),
-            b"TD_REAR",
-            1.0 if bool(rear_contact) else 0.0,
+            b"TD_CNTCT",
+            float(int(contact_mask) & 0x3F),
         )
         self.encoder.send(contact_msg, force_mavlink1=False)
         return self.output.bytes()

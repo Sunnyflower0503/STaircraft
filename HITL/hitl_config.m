@@ -94,7 +94,7 @@ cfg.stand.release_throttle = 0.5;
 cfg.stand.release_hold_s = 0.1;
 
 cfg.landing.liftoff_confirm_s = 0.05;
-cfg.landing.min_active_contacts = 5;
+cfg.landing.min_active_contacts = 6;
 cfg.landing.confirm_s = 0.1;
 cfg.landing.rear_contact_max_xy_speed = 0.5;
 cfg.landing.rear_contact_max_down_speed = 0.8;
