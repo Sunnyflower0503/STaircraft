@@ -1683,19 +1683,26 @@ def main():
             raise RuntimeError("PX4 did not reach multicopter state after FW->MC request")
         if (
             (args.full_landing or args.quadrilateral_landing)
+            and not args.polygon_fw_only
             and not args.hold_after_transition
             and not landing_reached
         ):
             raise RuntimeError("Full mission did not complete the multicopter position landing")
-        if args.quadrilateral_landing and not args.hold_after_transition and not tip_protection_reached:
+        if (
+            args.quadrilateral_landing
+            and not args.polygon_fw_only
+            and not args.hold_after_transition
+            and not tip_protection_reached
+        ):
             raise RuntimeError("Rear-contact wingtip protection did not reach its commanded PWM")
         if (
             (args.full_landing or args.quadrilateral_landing)
+            and not args.polygon_fw_only
             and not args.hold_after_transition
             and not auto_disarm_reached
         ):
             raise RuntimeError("PX4 did not automatically disarm after landing")
-        if args.quadrilateral_landing and not args.hold_after_transition and (
+        if args.quadrilateral_landing and not args.polygon_fw_only and not args.hold_after_transition and (
             math.isnan(touchdown_descent_m_s) or touchdown_descent_m_s > 0.8
         ):
             raise RuntimeError(
@@ -1725,7 +1732,11 @@ def main():
             print("FW->MC transition validation passed")
         if args.full_landing:
             print("Two-waypoint descent and position-landing mission passed")
-        if args.quadrilateral_landing and not args.hold_after_transition:
+        if (
+            args.quadrilateral_landing
+            and not args.polygon_fw_only
+            and not args.hold_after_transition
+        ):
             print("Vertical landing and rear-contact protection trigger reached")
         if args.fw_only:
             print("Two-waypoint fixed-wing tracking validation passed")
@@ -1735,7 +1746,9 @@ def main():
             else:
                 print("Stabilized-arm, stand-launch, closed-pentagon, back-transition, and position-hold mission passed")
         if args.quadrilateral_landing:
-            if picture_route_landing:
+            if picture_route_landing and args.polygon_fw_only:
+                print("Picture-route fixed-wing waypoint tracking and descent/flare validation passed")
+            elif picture_route_landing:
                 print(
                     "Picture route, separate fixed-wing descent/flare, back-transition, "
                     "5 s position hold, and six-contact vertical landing passed"
